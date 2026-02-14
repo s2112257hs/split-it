@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Item } from "./ItemsTable";
-import type { Participant } from "./Participants";
+import type { AssignmentsMap, Item, Participant } from "../types/split";
 import { centsToUsdString } from "../lib/money";
-
-export type AssignmentsMap = Record<string, string[]>;
 
 type Props = {
   currency: string;

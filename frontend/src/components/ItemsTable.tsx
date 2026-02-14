@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { centsToUsdString, usdStringToCents } from "../lib/money";
-
-export type Item = {
-  id: string;
-  description: string;
-  price_cents: number;
-};
+import type { Item } from "../types/split";
 
 type Props = {
   currency: string;
@@ -26,6 +21,7 @@ export default function ItemsTable({ currency, items, onChange, onBack, onNext }
 
   // Keep drafts in sync with items (after OCR / add/delete)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPriceDraft((prev) => {
       const next: Record<string, string> = { ...prev };
       for (const it of items) {
@@ -89,8 +85,8 @@ export default function ItemsTable({ currency, items, onChange, onBack, onNext }
       // Commit immediately so Total updates instantly
       setItem(id, { price_cents: cents });
       setRowError(id, null);
-    } catch (e: any) {
-      setRowError(id, e?.message ?? "Invalid price");
+    } catch (e: unknown) {
+      setRowError(id, e instanceof Error ? e.message : "Invalid price");
       // Do NOT change price_cents when invalid; total stays based on last valid value.
     }
   }
@@ -108,8 +104,8 @@ export default function ItemsTable({ currency, items, onChange, onBack, onNext }
           // commit
           setItem(it.id, { price_cents: cents });
         }
-      } catch (e: any) {
-        errors[it.id] = e?.message ?? "Invalid price";
+      } catch (e: unknown) {
+        errors[it.id] = e instanceof Error ? e.message : "Invalid price";
       }
     }
 
