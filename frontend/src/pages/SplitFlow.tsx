@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Assignments from "../components/Assignments";
 import ItemsTable from "../components/ItemsTable";
 import Participants from "../components/Participants";
@@ -7,14 +7,18 @@ import { useReceiptUpload } from "../hooks/useReceiptUpload";
 import { parseReceiptImage } from "../lib/api";
 import type { AssignmentsMap, Item, Participant, Step } from "../types/split";
 
+const stepOrder: Step[] = ["upload", "verify", "participants", "assign", "totals"];
+
 export default function SplitFlow() {
   const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const [step, setStep] = useState<Step>("upload");
   const [currency, setCurrency] = useState<string>("USD");
   const [items, setItems] = useState<Item[]>([]);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [assignments, setAssignments] = useState<AssignmentsMap>({});
+  const [isDragging, setIsDragging] = useState(false);
 
   const {
     file,
@@ -29,6 +33,8 @@ export default function SplitFlow() {
     resetUploadState,
   } = useReceiptUpload();
 
+  const stepIndex = stepOrder.indexOf(step);
+
   function handlePickFile(nextFile: File | null) {
     pickFile(nextFile);
     setItems([]);
@@ -40,7 +46,6 @@ export default function SplitFlow() {
 
   async function handleParseReceipt() {
     if (!file) return;
-
     beginUpload();
 
     try {
@@ -67,36 +72,67 @@ export default function SplitFlow() {
   return (
     <div className="app">
       <h1 className="h1">Split-It</h1>
+      <div className="stepper">
+        <p className="stepLabel">Step {stepIndex + 1} of 5</p>
+        <div className="progress" aria-hidden>
+          <div className="progressFill" style={{ width: `${((stepIndex + 1) / 5) * 100}%` }} />
+        </div>
+      </div>
 
       {step === "upload" && (
-        <div className="card stack">
-          <div className="subtle">Step 1 — Upload a receipt image</div>
+        <div className="card formCard stack">
+          <div>
+            <h2 className="stepTitle">Step 1 — Upload receipt</h2>
+            <div className="helper">Upload → Preview → Parse</div>
+          </div>
 
           <input
-            className="file"
+            ref={fileRef}
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg"
+            style={{ display: "none" }}
+            disabled={isUploading}
             onChange={(e) => handlePickFile(e.target.files?.[0] ?? null)}
           />
 
+          <button
+            className={`dropzone ${isDragging ? "dropzoneActive" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+              handlePickFile(e.dataTransfer.files?.[0] ?? null);
+            }}
+            onClick={() => fileRef.current?.click()}
+            disabled={isUploading}
+          >
+            <strong style={{ fontSize: 15 }}>Drop receipt image here</strong>
+            <span className="helper">PNG or JPG • clear photo works best</span>
+          </button>
+
           {previewUrl && (
             <div className="stack">
-              <div className="small">Preview</div>
-              <img className="preview" src={previewUrl} alt="Receipt preview" />
+              <div className="previewFrame">
+                <img src={previewUrl} alt="Receipt preview" />
+              </div>
+              <div>
+                <div style={{ fontSize: 13 }}>{file?.name}</div>
+                {file && <div className="helper">{(file.size / 1024).toFixed(1)} KB</div>}
+              </div>
             </div>
           )}
 
-          <button
-            onClick={handleParseReceipt}
-            disabled={!canParse}
-            className="btn btnPrimary"
-          >
-            {isUploading ? "Uploading & parsing…" : "Parse receipt"}
+          <button onClick={handleParseReceipt} disabled={!canParse} className="btn btnPrimary">
+            {isUploading ? "Parsing…" : "Parse receipt"}
           </button>
 
           {error && (
             <div className="alert">
-              <strong className="alertTitle">Error</strong>
+              <strong>Couldn’t parse the receipt</strong>
               <div>{error}</div>
             </div>
           )}

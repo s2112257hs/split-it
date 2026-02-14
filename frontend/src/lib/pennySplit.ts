@@ -14,13 +14,13 @@ export type SplitResult = {
 };
 
 /**
- * Penny-perfect split:
+ * Penny-perfect split with fair remainder allocation:
  * For each item assigned to m people:
- * - base = cents // m
+ * - base = cents // m (given to all selected participants)
  * - rem  = cents % m
- * First `rem` people (stable order) get base+1, rest get base.
- *
- * Stable order = participant list order (so distribution is deterministic).
+ * - each remainder cent goes to the selected participant with the
+ *   lowest running total at that moment.
+ * Tie-break: earlier participant in participants[] wins.
  */
 export function computePennyPerfectSplit(args: {
   items: Item[];
@@ -60,10 +60,28 @@ export function computePennyPerfectSplit(args: {
     const base = Math.trunc(cents / m);
     const rem = cents - base * m; // avoids % edge cases
 
-    selectedValid.forEach((pid, idx) => {
-      const add = base + (idx < rem ? 1 : 0);
-      totals.set(pid, (totals.get(pid) ?? 0) + add);
+    // Base allocation first.
+    selectedValid.forEach((pid) => {
+      totals.set(pid, (totals.get(pid) ?? 0) + base);
     });
+
+    // Fair remainder allocation: lowest running total wins, then stable order.
+    for (let i = 0; i < rem; i += 1) {
+      const selectedPid = selectedValid.reduce((bestPid, candidatePid) => {
+        const bestTotal = totals.get(bestPid) ?? 0;
+        const candidateTotal = totals.get(candidatePid) ?? 0;
+
+        if (candidateTotal < bestTotal) return candidatePid;
+        if (candidateTotal > bestTotal) return bestPid;
+
+        return (participantIndex.get(candidatePid) ?? Number.MAX_SAFE_INTEGER) <
+          (participantIndex.get(bestPid) ?? Number.MAX_SAFE_INTEGER)
+          ? candidatePid
+          : bestPid;
+      }, selectedValid[0]);
+
+      totals.set(selectedPid, (totals.get(selectedPid) ?? 0) + 1);
+    }
   }
 
   const per_person: PersonTotal[] = participants.map((p) => ({
