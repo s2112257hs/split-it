@@ -49,6 +49,7 @@ def ocr_endpoint():
 
     try:
         ocr_text = ocr_service.run_ocr(image_bytes)
+        print("OCR_TEXT:\n", ocr_text)
     except Exception:
         # Avoid leaking internals; log in real app
         return _json_error("OCR failed.", status=500, code="ocr_failed")

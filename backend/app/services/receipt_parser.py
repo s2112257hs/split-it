@@ -59,7 +59,26 @@ _EXCLUDE_KEYWORDS = (
     "mastercard",
     "amex",
     "amount due",
+    # metadata / footer
+    "date:",
+    "time",
+    "mid",
+    "tid",
+    "trns",
+    "trans",
+    "transaction",
+    "customer copy",
+    "please retain",
+    "receipt",
+    "auth",
+    "approval",
+    "ref",
 )
+
+_HAS_LETTER = re.compile(r"[A-Za-z]")
+_LONG_DIGIT_RUN = re.compile(r"\d{6,}")          # e.g., transaction IDs, barcodes
+_TIME_LIKE = re.compile(r"\b\d{1,2}:\d{2}(:\d{2})?\b")  # 21:41 or 21:41:06
+_DIGIT = re.compile(r"\d")
 
 
 def _looks_like_summary_line(text: str) -> bool:
@@ -112,6 +131,27 @@ def extract_items_from_lines(
 
         desc = line[: m.start("token")].strip()
         if not desc:
+            continue
+
+        # Skip long IDs (barcodes, transaction numbers)
+        if _LONG_DIGIT_RUN.search(desc):
+            continue
+
+        # Skip obvious time strings
+        if _TIME_LIKE.search(desc):
+            continue
+
+        # Filter: description must contain letters (prevents numeric blobs)
+        if not _HAS_LETTER.search(desc):
+            continue
+
+        if len(desc) > 60:
+            continue
+
+        # Filter: if description is mostly digits/spaces/punct, skip
+        digits = len(_DIGIT.findall(desc))
+        non_space = len([c for c in desc if not c.isspace()])
+        if non_space > 0 and digits / non_space > 0.60:
             continue
 
         items.append(ParsedItem(description=desc, price_cents=price_cents))
