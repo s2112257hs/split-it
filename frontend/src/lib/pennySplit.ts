@@ -6,8 +6,18 @@ export type PersonTotal = {
   total_cents: number;
 };
 
+export type PersonItemDetail = {
+  item_id: string;
+  item_name: string;
+  amount_cents: number;
+};
+
+export type PersonTotalWithDetails = PersonTotal & {
+  items: PersonItemDetail[];
+};
+
 export type SplitResult = {
-  per_person: PersonTotal[];
+  per_person: PersonTotalWithDetails[];
   receipt_total_cents: number;
   assigned_total_cents: number;
   unassigned_item_ids: string[];
@@ -33,7 +43,9 @@ export function computePennyPerfectSplit(args: {
 
   // Init totals map
   const totals = new Map<string, number>();
+  const details = new Map<string, PersonItemDetail[]>();
   for (const p of participants) totals.set(p.id, 0);
+  for (const p of participants) details.set(p.id, []);
 
   // Deterministic ordering for remainder distribution:
   const participantIndex = new Map<string, number>();
@@ -63,6 +75,14 @@ export function computePennyPerfectSplit(args: {
     // Base allocation first.
     selectedValid.forEach((pid) => {
       totals.set(pid, (totals.get(pid) ?? 0) + base);
+
+      if (base > 0) {
+        details.get(pid)?.push({
+          item_id: item.id,
+          item_name: item.description,
+          amount_cents: base,
+        });
+      }
     });
 
     // Fair remainder allocation: lowest running total wins, then stable order.
@@ -81,13 +101,28 @@ export function computePennyPerfectSplit(args: {
       }, selectedValid[0]);
 
       totals.set(selectedPid, (totals.get(selectedPid) ?? 0) + 1);
+
+      const detailEntries = details.get(selectedPid);
+      if (!detailEntries) continue;
+
+      const existingEntry = detailEntries.find((entry) => entry.item_id === item.id);
+      if (existingEntry) {
+        existingEntry.amount_cents += 1;
+      } else {
+        detailEntries.push({
+          item_id: item.id,
+          item_name: item.description,
+          amount_cents: 1,
+        });
+      }
     }
   }
 
-  const per_person: PersonTotal[] = participants.map((p) => ({
+  const per_person: PersonTotalWithDetails[] = participants.map((p) => ({
     participant_id: p.id,
     participant_name: p.name,
     total_cents: totals.get(p.id) ?? 0,
+    items: details.get(p.id) ?? [],
   }));
 
   return {
