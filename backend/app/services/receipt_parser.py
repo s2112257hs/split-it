@@ -33,7 +33,7 @@ _PRICE_AT_END_RE = re.compile(
     (?P<token>
       \$?\s*                 # optional $
       \d{1,7}                # digits
-      (?:[.,]\d{1,2})?       # optional decimals
+      (?:[.,]\d{1,2})      # optional decimals
       \s*-?                  # optional trailing dash
     )
     \s*$                     # end of line
@@ -76,7 +76,6 @@ _EXCLUDE_KEYWORDS = (
 )
 
 _HAS_LETTER = re.compile(r"[A-Za-z]")
-_LONG_DIGIT_RUN = re.compile(r"\d{6,}")          # e.g., transaction IDs, barcodes
 _TIME_LIKE = re.compile(r"\b\d{1,2}:\d{2}(:\d{2})?\b")  # 21:41 or 21:41:06
 _DIGIT = re.compile(r"\d")
 
@@ -113,6 +112,8 @@ def extract_items_from_lines(
         if not line:
             continue
 
+        line = re.sub(r"(\d)\s*[.,]\s*(\d{2})\s*$", r"\1.\2", line)
+
         if exclude_summary_lines and _looks_like_summary_line(line):
             continue
 
@@ -131,10 +132,6 @@ def extract_items_from_lines(
 
         desc = line[: m.start("token")].strip()
         if not desc:
-            continue
-
-        # Skip long IDs (barcodes, transaction numbers)
-        if _LONG_DIGIT_RUN.search(desc):
             continue
 
         # Skip obvious time strings
