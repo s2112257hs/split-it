@@ -1,7 +1,5 @@
 import { useMemo } from "react";
-import type { Item } from "./ItemsTable";
-import type { Participant } from "./Participants";
-import type { AssignmentsMap } from "./Assignments";
+import type { AssignmentsMap, Item, Participant } from "../types/split";
 import { centsToUsdString } from "../lib/money";
 import { computePennyPerfectSplit } from "../lib/pennySplit";
 
