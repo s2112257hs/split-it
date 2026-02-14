@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from flask import Blueprint, jsonify, request
 
-from app.domain.split_logic import SplitLogicError, split_cents_penny_perfect
+from app.domain.split_logic import SplitLogicError, split_cents_fair_remainder
 from app.services.receipt_parser import (
     ReceiptParseError,
     extract_items_from_ocr_text,
@@ -129,10 +129,19 @@ def calculate_endpoint():
     totals: Dict[str, int] = {pid: 0 for pid in participant_ids}
     grand_total = 0
 
-    # For each assigned item: split among listed participants
-    for item_id, pids in assignments.items():
+    participant_order = {pid: idx for idx, pid in enumerate(participant_ids)}
+
+    # Validate assignment keys first so unknown item ids are reported consistently.
+    for item_id in assignments:
         if item_id not in items_by_id:
             return _json_error(f"Assignment references unknown item id: {item_id}", status=400)
+
+    # Process items in receipt order.
+    for item in items:
+        item_id = item["id"]
+        pids = assignments.get(item_id)
+        if pids is None:
+            continue
         if not isinstance(pids, list) or not pids:
             return _json_error(f"Assignment for item {item_id} must be a non-empty list of participant ids.", status=400)
 
@@ -145,7 +154,7 @@ def calculate_endpoint():
         grand_total += item_total
 
         try:
-            alloc = split_cents_penny_perfect(item_total, pids)
+            alloc = split_cents_fair_remainder(item_total, pids, totals, participant_order)
         except SplitLogicError as e:
             return _json_error(str(e), status=422, code="split_failed")
 

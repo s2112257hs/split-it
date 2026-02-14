@@ -5,6 +5,7 @@ from app.domain.split_logic import (
     Allocation,
     SplitLogicError,
     add_allocation_to_totals,
+    split_cents_fair_remainder,
     split_cents_penny_perfect,
     split_items_and_sum,
 )
@@ -50,6 +51,24 @@ def test_single_participant_gets_all():
     assert sum(alloc.amounts_cents) == 999
 
 
+def test_fair_remainder_allocates_to_lowest_running_total():
+    running_totals = {"a": 100, "b": 10, "c": 10}
+    participant_order = {"a": 0, "b": 1, "c": 2}
+
+    alloc = split_cents_fair_remainder(5, ["a", "b", "c"], running_totals, participant_order)
+
+    # base=1 each => a=101,b=11,c=11 then remainder 2 should go to b then c
+    assert alloc.amounts_cents == (1, 2, 2)
+
+
+def test_fair_remainder_uses_participant_order_for_ties():
+    running_totals = {"a": 0, "b": 0}
+    participant_order = {"a": 0, "b": 1}
+
+    alloc = split_cents_fair_remainder(1, ["a", "b"], running_totals, participant_order)
+    assert alloc.amounts_cents == (1, 0)
+
+
 def test_invalid_total_type_raises():
     with pytest.raises(SplitLogicError):
         split_cents_penny_perfect("100", ["a", "b"])  # type: ignore[arg-type]
@@ -86,10 +105,10 @@ def test_add_allocation_to_totals_accumulates():
     assert totals == {"a": 26, "b": 27, "c": 25, "d": 26}
 
 
-def test_split_items_and_sum_end_to_end_penny_perfect():
-    # Two items:
-    # item1: 101 split among a,b -> 51,50
-    # item2:  99 split among b,c,d -> 33,33,33
+def test_split_items_and_sum_end_to_end_fair_remainder():
+    # Receipt order matters:
+    # item1: 101 split among a,b -> a=51,b=50
+    # item2:  99 split among b,c,d -> base=33 each, no remainder
     totals = split_items_and_sum(
         [
             ("i1", 101, ["a", "b"]),
