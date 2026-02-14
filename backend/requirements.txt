@@ -1,0 +1,16 @@
+# Web API
+Flask
+flask-cors
+
+# OCR (EasyOCR)
+easyocr
+numpy
+Pillow
+
+# PyTorch (CPU) - EasyOCR dependency
+torch
+torchvision
+torchaudio
+
+# Testing
+pytest
