@@ -1,5 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import ItemsTable, { type Item } from "./components/ItemsTable";
+import Participants, { type Participant } from "./components/Participants";
+import Assignments from "./components/Assignments";
+import Totals from "./components/Totals";
+
 
 type OcrResponse = {
   items: Item[];
@@ -10,7 +14,7 @@ type ApiError = {
   error: { code: string; message: string };
 };
 
-type Step = "upload" | "verify";
+type Step = "upload" | "verify" | "participants" | "assign" | "totals";
 
 export default function App() {
   const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -25,6 +29,8 @@ export default function App() {
 
   const [currency, setCurrency] = useState<string>("USD");
   const [items, setItems] = useState<Item[]>([]);
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [assignments, setAssignments] = useState<Record<string, string[]>>({});
 
   const canParse = !!file && !isUploading;
 
@@ -34,11 +40,20 @@ export default function App() {
     setItems([]);
     setCurrency("USD");
     setStep("upload");
+    // Participants are tied to a specific receipt/session; reset on new upload selection.
+    setParticipants([]);
 
-    // Manage preview URL lifecycle safely
+    // Revoke old preview URL before replacing it
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(f ? URL.createObjectURL(f) : null);
   }
+
+  // Ensure we always revoke the current preview URL on unmount / change.
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   async function onParseReceipt() {
     if (!file) return;
@@ -60,13 +75,16 @@ export default function App() {
       if (!res.ok) {
         if (contentType.includes("application/json")) {
           const errJson = (await res.json()) as ApiError;
-          throw new Error(errJson?.error?.message || `Request failed (${res.status})`);
+          throw new Error(
+            errJson?.error?.message || `Request failed (${res.status})`
+          );
         }
         const text = await res.text();
         throw new Error(text || `Request failed (${res.status})`);
       }
 
       const data = (await res.json()) as OcrResponse;
+
       if (!data || !Array.isArray(data.items)) {
         throw new Error("Unexpected response from /api/ocr (missing 'items').");
       }
@@ -82,57 +100,38 @@ export default function App() {
   }
 
   return (
-    <div
-      style={{
-        maxWidth: 900,
-        margin: "40px auto",
-        padding: "0 16px",
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-        color: "#111",
-      }}
-    >
-      <h1 style={{ marginBottom: 8 }}>Split-It</h1>
+    <div className="app">
+      <h1 className="h1">Split-It</h1>
 
       {step === "upload" && (
-        <div style={{ display: "grid", gap: 12, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
-          <div style={{ opacity: 0.8 }}>Step 1 — Upload a receipt image</div>
+        <div className="card stack">
+          <div className="subtle">Step 1 — Upload a receipt image</div>
 
           <input
+            className="file"
             type="file"
             accept="image/*"
             onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
           />
 
           {previewUrl && (
-            <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ fontSize: 14, opacity: 0.8 }}>Preview</div>
-              <img
-                src={previewUrl}
-                alt="Receipt preview"
-                style={{ maxWidth: "100%", borderRadius: 12, border: "1px solid #eee" }}
-              />
+            <div className="stack">
+              <div className="small">Preview</div>
+              <img className="preview" src={previewUrl} alt="Receipt preview" />
             </div>
           )}
 
           <button
             onClick={onParseReceipt}
             disabled={!canParse}
-            style={{
-              padding: "10px 14px",
-              borderRadius: 10,
-              border: "1px solid #111",
-              background: canParse ? "#111" : "#eee",
-              color: canParse ? "#fff" : "#666",
-              cursor: canParse ? "pointer" : "not-allowed",
-              width: "fit-content",
-            }}
+            className="btn btnPrimary"
           >
             {isUploading ? "Uploading & parsing…" : "Parse receipt"}
           </button>
 
           {error && (
-            <div style={{ padding: 12, borderRadius: 10, background: "#fff3f3", border: "1px solid #ffd0d0" }}>
-              <strong style={{ display: "block", marginBottom: 4 }}>Error</strong>
+            <div className="alert">
+              <strong className="alertTitle">Error</strong>
               <div>{error}</div>
             </div>
           )}
@@ -145,8 +144,47 @@ export default function App() {
           items={items}
           onChange={setItems}
           onBack={() => setStep("upload")}
-          // Next will become Step 3 (participants)
-          onNext={() => alert("Step 3 next (participants)")}
+          onNext={() => setStep("participants")}
+        />
+      )}
+
+      {step === "participants" && (
+        <Participants
+          participants={participants}
+          onChange={setParticipants}
+          onBack={() => setStep("verify")}
+          onNext={() => setStep("assign")}
+        />
+      )}
+
+      {step === "assign" && (
+        <Assignments
+          currency={currency}
+          items={items}
+          participants={participants}
+          assignments={assignments}
+          onChange={setAssignments}
+          onBack={() => setStep("participants")}
+          onNext={() => setStep("totals")}
+        />
+      )}
+
+      {step === "totals" && (
+        <Totals
+          currency={currency}
+          items={items}
+          participants={participants}
+          assignments={assignments}
+          onBack={() => setStep("assign")}
+          onReset={() => {
+            setStep("upload");
+            setFile(null);
+            setError(null);
+            setItems([]);
+            setCurrency("USD");
+            setParticipants([]);
+            setAssignments({});
+          }}
         />
       )}
     </div>
