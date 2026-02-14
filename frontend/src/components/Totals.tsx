@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import type { AssignmentsMap, Item, Participant } from "../types/split";
 import { centsToUsdString } from "../lib/money";
 import { computePennyPerfectSplit } from "../lib/pennySplit";
@@ -14,6 +14,7 @@ type Props = {
 
 export default function Totals({ currency, items, participants, assignments, onBack, onReset }: Props) {
   const [copied, setCopied] = useState(false);
+  const [expandedPeople, setExpandedPeople] = useState<Record<string, boolean>>({});
 
   const result = useMemo(
     () => computePennyPerfectSplit({ items, participants, assignments }),
@@ -57,12 +58,52 @@ export default function Totals({ currency, items, participants, assignments, onB
             </tr>
           </thead>
           <tbody>
-            {result.per_person.map((p) => (
-              <tr key={p.participant_id}>
-                <td>{p.participant_name}</td>
-                <td style={{ textAlign: "right" }}>{centsToUsdString(p.total_cents)}</td>
-              </tr>
-            ))}
+            {result.per_person.map((p) => {
+              const isExpanded = expandedPeople[p.participant_id] ?? false;
+
+              return (
+                <Fragment key={p.participant_id}>
+                  <tr key={p.participant_id}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
+                        <span>{p.participant_name}</span>
+                        <button
+                          className="btn"
+                          style={{ minHeight: 30, fontSize: 13, padding: "0 10px" }}
+                          onClick={() => {
+                            setExpandedPeople((prev) => ({
+                              ...prev,
+                              [p.participant_id]: !isExpanded,
+                            }));
+                          }}
+                        >
+                          {isExpanded ? "Hide details" : "View details"}
+                        </button>
+                      </div>
+                    </td>
+                    <td style={{ textAlign: "right" }}>{centsToUsdString(p.total_cents)}</td>
+                  </tr>
+                  {isExpanded && (
+                    <tr key={`${p.participant_id}-details`}>
+                      <td colSpan={2} style={{ background: "rgba(255, 255, 255, 0.02)" }}>
+                        {p.items.length === 0 ? (
+                          <div className="helper">No items assigned.</div>
+                        ) : (
+                          <div className="stack" style={{ gap: 6 }}>
+                            {p.items.map((item) => (
+                              <div key={`${p.participant_id}-${item.item_id}`} className="row" style={{ alignItems: "flex-start" }}>
+                                <span>{item.item_name}</span>
+                                <strong>{centsToUsdString(item.amount_cents)} {currency}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
           <tfoot>
             <tr>
