@@ -1,6 +1,4 @@
-import type { Item } from "../components/ItemsTable";
-import type { Participant } from "../components/Participants";
-import type { AssignmentsMap } from "../components/Assignments";
+import type { AssignmentsMap, Item, Participant } from "../types/split";
 
 export type PersonTotal = {
   participant_id: string;

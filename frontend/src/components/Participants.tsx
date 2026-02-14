@@ -1,9 +1,5 @@
 import { useMemo, useState } from "react";
-
-export type Participant = {
-  id: string;
-  name: string;
-};
+import type { Participant } from "../types/split";
 
 type Props = {
   participants: Participant[];
