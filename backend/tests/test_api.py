@@ -82,6 +82,34 @@ def test_calculate_happy_path_penny_perfect(client):
     assert sum(body["totals_by_participant_id"].values()) == body["grand_total_cents"]
 
 
+
+
+def test_calculate_uses_fair_remainder_and_receipt_order(client):
+    payload = {
+        "participants": [
+            {"id": "p1", "name": "Ali"},
+            {"id": "p2", "name": "Sara"},
+            {"id": "p3", "name": "Moe"},
+        ],
+        "items": [
+            {"id": "i1", "description": "Steak", "price_cents": 5},
+            {"id": "i2", "description": "Fries", "price_cents": 2},
+        ],
+        "assignments": {
+            "i2": ["p1", "p2"],
+            "i1": ["p1", "p2", "p3"],
+        },
+    }
+
+    r = client.post("/api/calculate", json=payload)
+    assert r.status_code == 200
+    body = r.get_json()
+
+    # i1 first by receipt order: base=1, rem=2 => p1/p2 get extra (totals 2,2,1)
+    # i2 next: base=1 each, rem=0 => (3,3,1)
+    assert body["totals_by_participant_id"] == {"p1": 3, "p2": 3, "p3": 1}
+    assert body["grand_total_cents"] == 7
+
 def test_calculate_rejects_unknown_participant_in_assignment(client):
     payload = {
         "participants": [{"id": "p1", "name": "Ali"}],

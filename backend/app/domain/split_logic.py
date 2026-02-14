@@ -67,6 +67,50 @@ def split_cents_penny_perfect(total_cents: int, participants: Sequence[str]) -> 
     )
 
 
+def split_cents_fair_remainder(
+    total_cents: int,
+    participants: Sequence[str],
+    running_totals: Dict[str, int],
+    participant_order: Dict[str, int],
+) -> Allocation:
+    """
+    Split cents with fair remainder allocation using current running totals.
+
+    Steps:
+    - Give every selected participant the base amount.
+    - Distribute each remainder cent to the selected participant with the
+      lowest running total at that moment.
+    - Ties are resolved by participant list order via participant_order.
+    """
+    alloc = split_cents_penny_perfect(total_cents, participants)
+    participant_ids = list(alloc.participants)
+    participant_idx = {pid: idx for idx, pid in enumerate(participant_ids)}
+    m = len(participant_ids)
+
+    base = total_cents // m
+    remainder = total_cents % m
+
+    amounts = [base for _ in participant_ids]
+    simulated_totals = {
+        pid: running_totals.get(pid, 0) + base
+        for pid in participant_ids
+    }
+
+    for _ in range(remainder):
+        selected_pid = min(
+            participant_ids,
+            key=lambda pid: (simulated_totals[pid], participant_order[pid]),
+        )
+        amounts[participant_idx[selected_pid]] += 1
+        simulated_totals[selected_pid] += 1
+
+    return Allocation(
+        total_cents=total_cents,
+        participants=tuple(participant_ids),
+        amounts_cents=tuple(amounts),
+    )
+
+
 def add_allocation_to_totals(
     totals_by_participant: Dict[str, int], allocation: Allocation
 ) -> Dict[str, int]:
@@ -94,7 +138,13 @@ def split_items_and_sum(
     - This function enforces penny-perfectness per item.
     """
     totals: Dict[str, int] = {}
+    participant_order: Dict[str, int] = {}
+
     for _item_id, cents, pids in items:
-        alloc = split_cents_penny_perfect(cents, pids)
+        for pid in pids:
+            if pid not in participant_order:
+                participant_order[pid] = len(participant_order)
+
+        alloc = split_cents_fair_remainder(cents, pids, totals, participant_order)
         add_allocation_to_totals(totals, alloc)
     return totals
