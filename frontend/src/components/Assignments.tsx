@@ -97,7 +97,7 @@ export default function Assignments({ currency, items, participants, assignments
                             setItemSelection(it.id, next);
                           }}
                         >
-                          {p.name}
+                          {p.display_name}
                         </button>
                       );
                     })}

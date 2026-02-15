@@ -4,19 +4,26 @@ export type Item = {
   price_cents: number;
 };
 
+export type PreviewItem = {
+  temp_id: string;
+  description: string;
+  price_cents: number;
+};
+
 export type Participant = {
   id: string;
-  name: string;
+  display_name: string;
+  running_total_cents: number;
 };
 
 export type AssignmentsMap = Record<string, string[]>;
 
 export type Step = "upload" | "verify" | "participants" | "assign" | "totals";
 
-export type OcrResponse = {
-  items: Item[];
+export type CreateReceiptResponse = {
+  receipt_image_id: string;
+  items: PreviewItem[];
   currency: string;
-  receipt_image_id?: string | null;
 };
 
 export type ApiError = {
@@ -24,6 +31,12 @@ export type ApiError = {
 };
 
 export type CalculateSplitResponse = {
+  receipt_image_id: string;
   totals_by_participant_id: Record<string, number>;
   grand_total_cents: number;
+  allocations: Array<{
+    participant_id: string;
+    receipt_item_id: string;
+    amount_cents: number;
+  }>;
 };

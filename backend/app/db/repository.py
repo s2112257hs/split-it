@@ -16,23 +16,24 @@ class ParsedItem:
 
 
 @dataclass(frozen=True)
-class ItemAllocation:
-    participant_name: str
-    receipt_item_id: str
-    amount_cents: int
+class ReceiptItemRecord:
+    id: str
+    description: str
+    price_cents: int
 
 
 @dataclass(frozen=True)
 class ParticipantRecord:
     id: str
-    name: str
+    display_name: str
+    running_total_cents: int
 
 
 @dataclass(frozen=True)
-class SummaryRecord:
+class ItemAllocation:
     participant_id: str
-    participant_name: str
-    total_cents: int
+    receipt_item_id: str
+    amount_cents: int
 
 
 class SplitItRepository:
@@ -50,7 +51,7 @@ class SplitItRepository:
             raise RuntimeError("psycopg is not installed")
         return psycopg.connect(self.database_url)
 
-    def create_receipt_with_items(self, *, owner_id: str, description: str, image_bytes: bytes, items: Sequence[ParsedItem]) -> tuple[str, list[str]]:
+    def create_receipt_image(self, *, owner_id: str, description: str, image_bytes: bytes) -> str:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -61,100 +62,151 @@ class SplitItRepository:
                 (owner_id, description, image_bytes),
             )
             receipt_id = cur.fetchone()[0]
+            conn.commit()
+            return str(receipt_id)
 
-            item_ids: list[str] = []
+    def replace_receipt_items(self, *, receipt_image_id: str, items: Sequence[ParsedItem]) -> list[ReceiptItemRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM receipt_items
+                WHERE receipt_image_id = %s
+                """,
+                (receipt_image_id,),
+            )
+
+            inserted: list[ReceiptItemRecord] = []
             for item in items:
                 cur.execute(
                     """
                     INSERT INTO receipt_items (receipt_image_id, description, item_price_cents)
                     VALUES (%s, %s, %s)
-                    RETURNING id
+                    RETURNING id, description, item_price_cents
                     """,
-                    (receipt_id, item.description, item.price_cents),
+                    (receipt_image_id, item.description, item.price_cents),
                 )
-                item_ids.append(str(cur.fetchone()[0]))
+                row = cur.fetchone()
+                inserted.append(ReceiptItemRecord(id=str(row[0]), description=str(row[1]), price_cents=int(row[2])))
 
             conn.commit()
-            return str(receipt_id), item_ids
+            return inserted
 
-    def add_allocations(self, *, participant_names: Iterable[str], allocations: Iterable[ItemAllocation]) -> None:
+    def get_receipt_items(self, *, receipt_image_id: str) -> list[ReceiptItemRecord]:
         with self._connect() as conn, conn.cursor() as cur:
-            participant_ids: dict[str, str] = {}
-            for participant_name in participant_names:
-                cur.execute(
-                    """
-                    INSERT INTO participants (display_name, running_total_cents)
-                    VALUES (%s, 0)
-                    ON CONFLICT (display_name)
-                    DO UPDATE SET display_name = EXCLUDED.display_name
-                    RETURNING id
-                    """,
-                    (participant_name,),
-                )
-                participant_ids[participant_name] = str(cur.fetchone()[0])
+            cur.execute(
+                """
+                SELECT id::text, description, item_price_cents
+                FROM receipt_items
+                WHERE receipt_image_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (receipt_image_id,),
+            )
+            return [ReceiptItemRecord(id=row[0], description=row[1], price_cents=int(row[2])) for row in cur.fetchall()]
 
-            for alloc in allocations:
-                participant_id = participant_ids[alloc.participant_name]
-                cur.execute(
-                    """
-                    INSERT INTO participant_item_allocations (participant_id, receipt_item_id, amount_cents)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (participant_id, alloc.receipt_item_id, alloc.amount_cents),
-                )
-
-            conn.commit()
-
-
-    def create_participants(self, *, participant_names: Sequence[str]) -> list[ParticipantRecord]:
+    def list_participants(self) -> list[ParticipantRecord]:
         with self._connect() as conn, conn.cursor() as cur:
-            rows: list[ParticipantRecord] = []
-            for participant_name in participant_names:
-                cur.execute(
-                    """
-                    INSERT INTO participants (display_name, running_total_cents)
-                    VALUES (%s, 0)
-                    ON CONFLICT (display_name)
-                    DO UPDATE SET display_name = EXCLUDED.display_name
-                    RETURNING id, display_name
-                    """,
-                    (participant_name,),
-                )
-                participant_id, display_name = cur.fetchone()
-                rows.append(ParticipantRecord(id=str(participant_id), name=str(display_name)))
+            cur.execute(
+                """
+                SELECT id::text, display_name, running_total_cents
+                FROM participants
+                ORDER BY created_at ASC, display_name ASC
+                """
+            )
+            return [
+                ParticipantRecord(id=row[0], display_name=row[1], running_total_cents=int(row[2]))
+                for row in cur.fetchall()
+            ]
 
-            conn.commit()
-            return rows
-
-    def get_summary(self, *, receipt_image_id: str, participant_ids: Sequence[str]) -> list[SummaryRecord]:
+    def get_participants_by_ids(self, *, participant_ids: Sequence[str]) -> list[ParticipantRecord]:
         if not participant_ids:
             return []
 
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                    p.id::text AS participant_id,
-                    p.display_name,
-                    COALESCE(SUM(CASE WHEN ri.id IS NOT NULL THEN pia.amount_cents ELSE 0 END), 0) AS total_cents
-                FROM participants p
-                LEFT JOIN participant_item_allocations pia
-                    ON pia.participant_id = p.id
-                LEFT JOIN receipt_items ri
-                    ON ri.id = pia.receipt_item_id
-                    AND ri.receipt_image_id = %s
-                WHERE p.id = ANY(%s::uuid[])
-                GROUP BY p.id, p.display_name
-                ORDER BY p.display_name ASC
+                SELECT id::text, display_name, running_total_cents
+                FROM participants
+                WHERE id = ANY(%s::uuid[])
                 """,
-                (receipt_image_id, list(participant_ids)),
+                (list(participant_ids),),
             )
-
             return [
-                SummaryRecord(
-                    participant_id=row[0],
-                    participant_name=row[1],
-                    total_cents=int(row[2]),
-                )
+                ParticipantRecord(id=row[0], display_name=row[1], running_total_cents=int(row[2]))
                 for row in cur.fetchall()
             ]
+
+    def create_or_get_participant(self, *, display_name: str) -> ParticipantRecord:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO participants (display_name, running_total_cents)
+                VALUES (%s, 0)
+                ON CONFLICT (display_name)
+                DO UPDATE SET display_name = EXCLUDED.display_name
+                RETURNING id::text, display_name, running_total_cents
+                """,
+                (display_name,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return ParticipantRecord(id=row[0], display_name=row[1], running_total_cents=int(row[2]))
+
+    def participant_has_allocations(self, *, participant_id: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM participant_item_allocations
+                    WHERE participant_id = %s
+                )
+                """,
+                (participant_id,),
+            )
+            return bool(cur.fetchone()[0])
+
+    def delete_participant(self, *, participant_id: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM participants
+                WHERE id = %s
+                """,
+                (participant_id,),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+
+    def replace_allocations_for_receipt(self, *, receipt_image_id: str, allocations: Iterable[ItemAllocation]) -> None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id::text
+                FROM receipt_items
+                WHERE receipt_image_id = %s
+                """,
+                (receipt_image_id,),
+            )
+            item_ids = [row[0] for row in cur.fetchall()]
+
+            if item_ids:
+                cur.execute(
+                    """
+                    DELETE FROM participant_item_allocations
+                    WHERE receipt_item_id = ANY(%s::uuid[])
+                    """,
+                    (item_ids,),
+                )
+
+            for alloc in allocations:
+                cur.execute(
+                    """
+                    INSERT INTO participant_item_allocations (participant_id, receipt_item_id, amount_cents)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (alloc.participant_id, alloc.receipt_item_id, alloc.amount_cents),
+                )
+
+            conn.commit()

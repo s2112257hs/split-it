@@ -4,7 +4,7 @@ import ItemsTable from "../components/ItemsTable";
 import Participants from "../components/Participants";
 import Totals from "../components/Totals";
 import { useReceiptUpload } from "../hooks/useReceiptUpload";
-import { calculateSplit, createParticipants, parseReceiptImage } from "../lib/api";
+import { calculateSplit, createParticipant, createReceipt, listParticipants, replaceReceiptItems } from "../lib/api";
 import type { AssignmentsMap, Item, Participant, Step } from "../types/split";
 
 const stepOrder: Step[] = ["upload", "verify", "participants", "assign", "totals"];
@@ -20,6 +20,7 @@ export default function SplitFlow() {
   const [assignments, setAssignments] = useState<AssignmentsMap>({});
   const [isDragging, setIsDragging] = useState(false);
   const [billDescription, setBillDescription] = useState("");
+  const [receiptImageId, setReceiptImageId] = useState<string | null>(null);
 
   const {
     file,
@@ -43,6 +44,7 @@ export default function SplitFlow() {
     setStep("upload");
     setParticipants([]);
     setAssignments({});
+    setReceiptImageId(null);
   }
 
   async function handleParseReceipt() {
@@ -50,9 +52,10 @@ export default function SplitFlow() {
     beginUpload();
 
     try {
-      const data = await parseReceiptImage(file, billDescription.trim(), apiBase);
+      const data = await createReceipt(file, billDescription.trim(), apiBase);
       setCurrency(data.currency || "USD");
-      setItems(data.items);
+      setItems(data.items.map((item) => ({ id: item.temp_id, description: item.description, price_cents: item.price_cents })));
+      setReceiptImageId(data.receipt_image_id);
       setStep("verify");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Upload failed.");
@@ -61,13 +64,31 @@ export default function SplitFlow() {
     }
   }
 
-  async function handlePersistParticipants() {
+  async function handlePersistItems() {
+    if (!receiptImageId) return;
+
     try {
-      const saved = await createParticipants({
-        participants: participants.map((participant) => participant.name),
+      const persisted = await replaceReceiptItems({
+        receiptImageId,
+        items: items.map((item) => ({ id: null, description: item.description, price_cents: item.price_cents })),
         apiBase,
       });
-      setParticipants(saved);
+      setItems(persisted);
+      const existing = await listParticipants(apiBase);
+      setParticipants(existing);
+      setStep("participants");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to save items.");
+    }
+  }
+
+  async function handlePersistParticipants() {
+    try {
+      const created = await Promise.all(
+        participants.map((participant) => createParticipant({ display_name: participant.display_name, apiBase }))
+      );
+      const uniqueById = new Map(created.map((participant) => [participant.id, participant]));
+      setParticipants([...uniqueById.values()]);
       setStep("assign");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save participants.");
@@ -75,8 +96,10 @@ export default function SplitFlow() {
   }
 
   async function handlePersistAssignments() {
+    if (!receiptImageId) return;
+
     try {
-      await calculateSplit({ participants, items, assignments, apiBase });
+      await calculateSplit({ receiptImageId, participants, assignments, apiBase });
       setStep("totals");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save assignments.");
@@ -90,6 +113,7 @@ export default function SplitFlow() {
     setParticipants([]);
     setAssignments({});
     setBillDescription("");
+    setReceiptImageId(null);
     resetUploadState();
   }
 
@@ -188,7 +212,7 @@ export default function SplitFlow() {
           items={items}
           onChange={setItems}
           onBack={() => setStep("upload")}
-          onNext={() => setStep("participants")}
+          onNext={handlePersistItems}
         />
       )}
 
@@ -213,9 +237,10 @@ export default function SplitFlow() {
         />
       )}
 
-      {step === "totals" && (
+      {step === "totals" && receiptImageId && (
         <Totals
           apiBase={apiBase}
+          receiptImageId={receiptImageId}
           currency={currency}
           items={items}
           participants={participants}

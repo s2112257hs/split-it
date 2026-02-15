@@ -17,12 +17,12 @@ export default function Participants({ participants, onChange, onBack, onNext }:
   const [showErrors, setShowErrors] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  const normalizedNames = useMemo(() => participants.map((p) => p.name.trim().toLowerCase()), [participants]);
+  const normalizedNames = useMemo(() => participants.map((p) => p.display_name.trim().toLowerCase()), [participants]);
 
   const errors = useMemo(() => {
     const e: Record<string, string> = {};
     participants.forEach((p, idx) => {
-      const name = p.name.trim();
+      const name = p.display_name.trim();
       if (!name) e[p.id] = "Name is required.";
       const firstIndex = normalizedNames.indexOf(name.toLowerCase());
       if (name && firstIndex !== -1 && firstIndex !== idx) e[p.id] = "Duplicate name.";
@@ -35,7 +35,7 @@ export default function Participants({ participants, onChange, onBack, onNext }:
   function addParticipant() {
     const name = newName.trim();
     if (!name) return;
-    onChange([...participants, { id: makeId(), name }]);
+    onChange([...participants, { id: makeId(), display_name: name, running_total_cents: 0 }]);
     setNewName("");
   }
 
@@ -74,8 +74,8 @@ export default function Participants({ participants, onChange, onBack, onNext }:
                 <div style={{ display: "flex", gap: 10 }}>
                   <input
                     className={`input ${showErrors && err ? "inputError" : ""}`}
-                    value={p.name}
-                    onChange={(e) => onChange(participants.map((x) => (x.id === p.id ? { ...x, name: e.target.value } : x)))}
+                    value={p.display_name}
+                    onChange={(e) => onChange(participants.map((x) => (x.id === p.id ? { ...x, display_name: e.target.value } : x)))}
                     disabled={isSaving}
                   />
                   <button className="btn btnDanger" onClick={() => onChange(participants.filter((x) => x.id !== p.id))} disabled={isSaving}>
