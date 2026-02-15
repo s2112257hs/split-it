@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { calculateSplit } from "../lib/api";
 import { centsToUsdString } from "../lib/money";
-import type { AssignmentsMap, Item, Participant } from "../types/split";
+import type { AssignmentsMap, Participant } from "../types/split";
 
 type Props = {
   apiBase: string;
   currency: string;
   items: Array<{ id: string; description: string; price_cents: number }>;
   participants: Participant[];
+  assignments: AssignmentsMap;
   onBack?: () => void;
   onReset?: () => void;
 };
@@ -84,8 +85,8 @@ export default function Totals({ apiBase, currency, items, participants, assignm
 
       {unassignedItemIds.length > 0 && (
         <div className="alert">
-          <strong>Couldn’t load summary.</strong>
-          <div>{error}</div>
+          <strong>Some items are unassigned.</strong>
+          <div>{unassignedItemIds.length} item(s) have no participants selected and are excluded from the assigned total.</div>
         </div>
       )}
 
