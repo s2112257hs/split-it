@@ -1,4 +1,11 @@
-import type { ApiError, OcrResponse } from "../types/split";
+import type {
+  ApiError,
+  AssignmentsMap,
+  CalculateSplitResponse,
+  Item,
+  OcrResponse,
+  Participant,
+} from "../types/split";
 
 export async function parseReceiptImage(file: File, description: string, apiBase: string): Promise<OcrResponse> {
   const form = new FormData();
@@ -26,6 +33,43 @@ export async function parseReceiptImage(file: File, description: string, apiBase
 
   if (!data || !Array.isArray(data.items)) {
     throw new Error("Unexpected response from /api/ocr (missing 'items').");
+  }
+
+  return data;
+}
+
+export async function calculateSplit(args: {
+  participants: Participant[];
+  items: Item[];
+  assignments: AssignmentsMap;
+  apiBase: string;
+}): Promise<CalculateSplitResponse> {
+  const { participants, items, assignments, apiBase } = args;
+
+  const response = await fetch(`${apiBase}/api/calculate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ participants, items, assignments }),
+  });
+
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!response.ok) {
+    if (contentType.includes("application/json")) {
+      const errJson = (await response.json()) as ApiError;
+      throw new Error(errJson?.error?.message || `Request failed (${response.status})`);
+    }
+
+    const text = await response.text();
+    throw new Error(text || `Request failed (${response.status})`);
+  }
+
+  const data = (await response.json()) as CalculateSplitResponse;
+
+  if (!data || typeof data.grand_total_cents !== "number" || !data.totals_by_participant_id) {
+    throw new Error("Unexpected response from /api/calculate.");
   }
 
   return data;

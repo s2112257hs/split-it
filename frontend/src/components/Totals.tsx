@@ -1,9 +1,10 @@
-import { Fragment, useMemo, useState } from "react";
-import type { AssignmentsMap, Item, Participant } from "../types/split";
+import { useEffect, useMemo, useState } from "react";
+import { calculateSplit } from "../lib/api";
 import { centsToUsdString } from "../lib/money";
-import { computePennyPerfectSplit } from "../lib/pennySplit";
+import type { AssignmentsMap, Item, Participant } from "../types/split";
 
 type Props = {
+  apiBase: string;
   currency: string;
   items: Item[];
   participants: Participant[];
@@ -12,21 +13,54 @@ type Props = {
   onReset?: () => void;
 };
 
-export default function Totals({ currency, items, participants, assignments, onBack, onReset }: Props) {
+export default function Totals({ apiBase, currency, items, participants, assignments, onBack, onReset }: Props) {
   const [copied, setCopied] = useState(false);
-  const [expandedPeople, setExpandedPeople] = useState<Record<string, boolean>>({});
+  const [totalsByParticipantId, setTotalsByParticipantId] = useState<Record<string, number>>({});
+  const [assignedTotalCents, setAssignedTotalCents] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const result = useMemo(
-    () => computePennyPerfectSplit({ items, participants, assignments }),
-    [items, participants, assignments]
+  const receiptTotalCents = useMemo(() => items.reduce((sum, item) => sum + item.price_cents, 0), [items]);
+
+  const unassignedItemIds = useMemo(
+    () => items.filter((item) => !(assignments[item.id]?.length)).map((item) => item.id),
+    [items, assignments]
   );
+
+  useEffect(() => {
+    let isActive = true;
+
+    const fetchTotals = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const result = await calculateSplit({ participants, items, assignments, apiBase });
+
+        if (!isActive) return;
+        setTotalsByParticipantId(result.totals_by_participant_id);
+        setAssignedTotalCents(result.grand_total_cents);
+      } catch (e: unknown) {
+        if (!isActive) return;
+        setError(e instanceof Error ? e.message : "Failed to calculate totals.");
+      } finally {
+        if (isActive) setIsLoading(false);
+      }
+    };
+
+    void fetchTotals();
+
+    return () => {
+      isActive = false;
+    };
+  }, [participants, items, assignments, apiBase]);
 
   const sumPerPerson = useMemo(
-    () => result.per_person.reduce((s, p) => s + p.total_cents, 0),
-    [result.per_person]
+    () => participants.reduce((sum, participant) => sum + (totalsByParticipantId[participant.id] ?? 0), 0),
+    [participants, totalsByParticipantId]
   );
 
-  const reconciles = sumPerPerson === result.assigned_total_cents;
+  const reconciles = sumPerPerson === assignedTotalCents;
 
   return (
     <div className="card tableCard stack">
@@ -35,12 +69,21 @@ export default function Totals({ currency, items, participants, assignments, onB
       </div>
 
       <div className="pillRow">
-        <div className="pill">Receipt total: {centsToUsdString(result.receipt_total_cents)} {currency}</div>
-        <div className="pill">Assigned total: {centsToUsdString(result.assigned_total_cents)} {currency}</div>
+        <div className="pill">Receipt total: {centsToUsdString(receiptTotalCents)} {currency}</div>
+        <div className="pill">Assigned total: {centsToUsdString(assignedTotalCents)} {currency}</div>
         <div className={reconciles ? "statusOk" : "statusBad"}>{reconciles ? "OK" : "Mismatch"}</div>
       </div>
 
-      {result.unassigned_item_ids.length > 0 && (
+      {isLoading && <div className="helper">Calculating totals…</div>}
+
+      {error && (
+        <div className="alert">
+          <strong>Couldn’t calculate totals.</strong>
+          <div>{error}</div>
+        </div>
+      )}
+
+      {unassignedItemIds.length > 0 && (
         <div className="alert">
           <strong>Unassigned items exist.</strong>
           <div style={{ marginTop: 8 }}>
@@ -58,52 +101,12 @@ export default function Totals({ currency, items, participants, assignments, onB
             </tr>
           </thead>
           <tbody>
-            {result.per_person.map((p) => {
-              const isExpanded = expandedPeople[p.participant_id] ?? false;
-
-              return (
-                <Fragment key={p.participant_id}>
-                  <tr key={p.participant_id}>
-                    <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
-                        <span>{p.participant_name}</span>
-                        <button
-                          className="btn"
-                          style={{ minHeight: 30, fontSize: 13, padding: "0 10px" }}
-                          onClick={() => {
-                            setExpandedPeople((prev) => ({
-                              ...prev,
-                              [p.participant_id]: !isExpanded,
-                            }));
-                          }}
-                        >
-                          {isExpanded ? "Hide details" : "View details"}
-                        </button>
-                      </div>
-                    </td>
-                    <td style={{ textAlign: "right" }}>{centsToUsdString(p.total_cents)}</td>
-                  </tr>
-                  {isExpanded && (
-                    <tr key={`${p.participant_id}-details`}>
-                      <td colSpan={2} style={{ background: "rgba(255, 255, 255, 0.02)" }}>
-                        {p.items.length === 0 ? (
-                          <div className="helper">No items assigned.</div>
-                        ) : (
-                          <div className="stack" style={{ gap: 6 }}>
-                            {p.items.map((item) => (
-                              <div key={`${p.participant_id}-${item.item_id}`} className="row" style={{ alignItems: "flex-start" }}>
-                                <span>{item.item_name}</span>
-                                <strong>{centsToUsdString(item.amount_cents)} {currency}</strong>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
+            {participants.map((participant) => (
+              <tr key={participant.id}>
+                <td>{participant.name}</td>
+                <td style={{ textAlign: "right" }}>{centsToUsdString(totalsByParticipantId[participant.id] ?? 0)}</td>
+              </tr>
+            ))}
           </tbody>
           <tfoot>
             <tr>
@@ -118,8 +121,10 @@ export default function Totals({ currency, items, participants, assignments, onB
         <button
           className="btn"
           onClick={async () => {
-            const lines = result.per_person.map((p) => `${p.participant_name} — ${centsToUsdString(p.total_cents)} ${currency}`);
-            lines.push(`Total — ${centsToUsdString(result.assigned_total_cents)} ${currency}`);
+            const lines = participants.map(
+              (participant) => `${participant.name} — ${centsToUsdString(totalsByParticipantId[participant.id] ?? 0)} ${currency}`
+            );
+            lines.push(`Total — ${centsToUsdString(assignedTotalCents)} ${currency}`);
             await navigator.clipboard.writeText(lines.join("\n"));
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
