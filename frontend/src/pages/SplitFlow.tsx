@@ -220,7 +220,6 @@ export default function SplitFlow() {
       {step === "totals" && receiptImageId && (
         <Totals
           apiBase={apiBase}
-          receiptImageId={receiptImageId}
           currency={currency}
           items={items}
           participants={participants}

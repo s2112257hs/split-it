@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { getSummary } from "../lib/api";
+import { calculateSplit } from "../lib/api";
 import { centsToUsdString } from "../lib/money";
-import type { Participant } from "../types/split";
+import type { AssignmentsMap, Item, Participant } from "../types/split";
 
 type Props = {
   apiBase: string;
-  receiptImageId: string;
   currency: string;
   items: Array<{ id: string; description: string; price_cents: number }>;
   participants: Participant[];
@@ -13,7 +12,7 @@ type Props = {
   onReset?: () => void;
 };
 
-export default function Totals({ apiBase, receiptImageId, currency, items, participants, onBack, onReset }: Props) {
+export default function Totals({ apiBase, currency, items, participants, assignments, onBack, onReset }: Props) {
   const [copied, setCopied] = useState(false);
   const [totalsByParticipantId, setTotalsByParticipantId] = useState<Record<string, number>>({});
   const [assignedTotalCents, setAssignedTotalCents] = useState(0);
@@ -22,37 +21,38 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
 
   const receiptTotalCents = useMemo(() => items.reduce((sum, item) => sum + item.price_cents, 0), [items]);
 
+  const unassignedItemIds = useMemo(
+    () => items.filter((item) => !(assignments[item.id]?.length)).map((item) => item.id),
+    [items, assignments]
+  );
+
   useEffect(() => {
     let isActive = true;
 
-    const fetchSummary = async () => {
+    const fetchTotals = async () => {
       setIsLoading(true);
       setError(null);
 
       try {
-        const result = await getSummary({
-          receiptImageId,
-          participantIds: participants.map((participant) => participant.id),
-          apiBase,
-        });
+        const result = await calculateSplit({ participants, items, assignments, apiBase });
 
         if (!isActive) return;
         setTotalsByParticipantId(result.totals_by_participant_id);
         setAssignedTotalCents(result.grand_total_cents);
       } catch (e: unknown) {
         if (!isActive) return;
-        setError(e instanceof Error ? e.message : "Failed to fetch summary.");
+        setError(e instanceof Error ? e.message : "Failed to calculate totals.");
       } finally {
         if (isActive) setIsLoading(false);
       }
     };
 
-    void fetchSummary();
+    void fetchTotals();
 
     return () => {
       isActive = false;
     };
-  }, [receiptImageId, participants, apiBase]);
+  }, [participants, items, assignments, apiBase]);
 
   const sumPerPerson = useMemo(
     () => participants.reduce((sum, participant) => sum + (totalsByParticipantId[participant.id] ?? 0), 0),
@@ -73,9 +73,16 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
         <div className={reconciles ? "statusOk" : "statusBad"}>{reconciles ? "OK" : "Mismatch"}</div>
       </div>
 
-      {isLoading && <div className="helper">Loading summary…</div>}
+      {isLoading && <div className="helper">Calculating totals…</div>}
 
       {error && (
+        <div className="alert">
+          <strong>Couldn’t calculate totals.</strong>
+          <div>{error}</div>
+        </div>
+      )}
+
+      {unassignedItemIds.length > 0 && (
         <div className="alert">
           <strong>Couldn’t load summary.</strong>
           <div>{error}</div>
