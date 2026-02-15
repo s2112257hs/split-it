@@ -186,6 +186,7 @@ export default function SplitFlow() {
 
       {step === "totals" && (
         <Totals
+          apiBase={apiBase}
           currency={currency}
           items={items}
           participants={participants}
