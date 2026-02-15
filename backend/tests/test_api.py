@@ -145,3 +145,145 @@ def test_calculate_rejects_non_json(client):
     r = client.post("/api/calculate", data="not-json", content_type="text/plain")
     assert r.status_code == 400
     assert "must be json" in r.get_json()["error"]["message"].lower()
+
+
+def test_calculate_rejects_duplicate_participant_ids(client):
+    payload = {
+        "participants": [{"id": "p1", "name": "Ali"}, {"id": "p1", "name": "Alex"}],
+        "items": [{"id": "i1", "description": "Coke", "price_cents": 350}],
+        "assignments": {"i1": ["p1"]},
+    }
+
+    r = client.post("/api/calculate", json=payload)
+    assert r.status_code == 400
+    assert "unique" in r.get_json()["error"]["message"].lower()
+
+
+def test_calculate_rejects_duplicate_item_ids(client):
+    payload = {
+        "participants": [{"id": "p1", "name": "Ali"}],
+        "items": [
+            {"id": "i1", "description": "Coke", "price_cents": 350},
+            {"id": "i1", "description": "Fries", "price_cents": 250},
+        ],
+        "assignments": {"i1": ["p1"]},
+    }
+
+    r = client.post("/api/calculate", json=payload)
+    assert r.status_code == 400
+    assert "item ids must be unique" in r.get_json()["error"]["message"].lower()
+
+
+def test_calculate_rejects_duplicate_assignment_participant_ids(client):
+    payload = {
+        "participants": [{"id": "p1", "name": "Ali"}],
+        "items": [{"id": "i1", "description": "Coke", "price_cents": 350}],
+        "assignments": {"i1": ["p1", "p1"]},
+    }
+
+    r = client.post("/api/calculate", json=payload)
+    assert r.status_code == 400
+    assert "duplicate" in r.get_json()["error"]["message"].lower()
+
+
+def test_calculate_skips_persisting_non_uuid_item_allocations(client, monkeypatch):
+    captured = {}
+
+    class FakeRepo:
+        enabled = True
+
+        def add_allocations(self, *, participant_names, allocations):
+            captured["participant_names"] = set(participant_names)
+            captured["allocations"] = list(allocations)
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    payload = {
+        "participants": [{"id": "p1", "name": "Ali"}],
+        "items": [{"id": "item_local", "description": "Added in UI", "price_cents": 350}],
+        "assignments": {"item_local": ["p1"]},
+    }
+
+    r = client.post("/api/calculate", json=payload)
+    assert r.status_code == 200
+    assert r.get_json()["totals_by_participant_id"] == {"p1": 350}
+    assert "allocations" not in captured
+
+
+def test_participants_rejects_duplicate_names(client):
+    payload = {"participants": ["Ali", "ali"]}
+    r = client.post("/api/participants", json=payload)
+    assert r.status_code == 400
+    assert "unique" in r.get_json()["error"]["message"].lower()
+
+
+def test_participants_requires_database(client):
+    payload = {"participants": ["Ali", "Sara"]}
+    r = client.post("/api/participants", json=payload)
+    assert r.status_code == 503
+
+
+def test_summary_returns_backend_totals(client, monkeypatch):
+    class Row:
+        def __init__(self, participant_id, total_cents):
+            self.participant_id = participant_id
+            self.total_cents = total_cents
+
+    class FakeRepo:
+        enabled = True
+
+        def get_summary(self, *, receipt_image_id, participant_ids):
+            assert receipt_image_id == "11111111-1111-1111-1111-111111111111"
+            assert participant_ids == [
+                "22222222-2222-2222-2222-222222222222",
+                "33333333-3333-3333-3333-333333333333",
+            ]
+            return [
+                Row("22222222-2222-2222-2222-222222222222", 226),
+                Row("33333333-3333-3333-3333-333333333333", 225),
+            ]
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    payload = {
+        "receipt_image_id": "11111111-1111-1111-1111-111111111111",
+        "participant_ids": [
+            "22222222-2222-2222-2222-222222222222",
+            "33333333-3333-3333-3333-333333333333",
+        ],
+    }
+
+    r = client.post("/api/summary", json=payload)
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["totals_by_participant_id"] == {
+        "22222222-2222-2222-2222-222222222222": 226,
+        "33333333-3333-3333-3333-333333333333": 225,
+    }
+    assert body["grand_total_cents"] == 451
+
+
+def test_participants_persists_and_returns_ids(client, monkeypatch):
+    class Row:
+        def __init__(self, participant_id, name):
+            self.id = participant_id
+            self.name = name
+
+    class FakeRepo:
+        enabled = True
+
+        def create_participants(self, *, participant_names):
+            assert participant_names == ["Ali", "Sara"]
+            return [
+                Row("22222222-2222-2222-2222-222222222222", "Ali"),
+                Row("33333333-3333-3333-3333-333333333333", "Sara"),
+            ]
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post("/api/participants", json={"participants": ["Ali", "Sara"]})
+    assert r.status_code == 200
+    assert r.get_json()["participants"] == [
+        {"id": "22222222-2222-2222-2222-222222222222", "name": "Ali"},
+        {"id": "33333333-3333-3333-3333-333333333333", "name": "Sara"},
+    ]

@@ -17,16 +17,8 @@ export async function parseReceiptImage(file: File, description: string, apiBase
     body: form,
   });
 
-  const contentType = response.headers.get("content-type") || "";
-
   if (!response.ok) {
-    if (contentType.includes("application/json")) {
-      const errJson = (await response.json()) as ApiError;
-      throw new Error(errJson?.error?.message || `Request failed (${response.status})`);
-    }
-
-    const text = await response.text();
-    throw new Error(text || `Request failed (${response.status})`);
+    throw new Error(await parseApiError(response));
   }
 
   const data = (await response.json()) as OcrResponse;

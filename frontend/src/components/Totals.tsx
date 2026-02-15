@@ -6,9 +6,8 @@ import type { AssignmentsMap, Item, Participant } from "../types/split";
 type Props = {
   apiBase: string;
   currency: string;
-  items: Item[];
+  items: Array<{ id: string; description: string; price_cents: number }>;
   participants: Participant[];
-  assignments: AssignmentsMap;
   onBack?: () => void;
   onReset?: () => void;
 };
@@ -85,10 +84,8 @@ export default function Totals({ apiBase, currency, items, participants, assignm
 
       {unassignedItemIds.length > 0 && (
         <div className="alert">
-          <strong>Unassigned items exist.</strong>
-          <div style={{ marginTop: 8 }}>
-            <button className="btn btnDanger" onClick={onBack}>Go back to assignments</button>
-          </div>
+          <strong>Couldn’t load summary.</strong>
+          <div>{error}</div>
         </div>
       )}
 

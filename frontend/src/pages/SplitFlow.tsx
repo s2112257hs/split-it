@@ -4,7 +4,7 @@ import ItemsTable from "../components/ItemsTable";
 import Participants from "../components/Participants";
 import Totals from "../components/Totals";
 import { useReceiptUpload } from "../hooks/useReceiptUpload";
-import { parseReceiptImage } from "../lib/api";
+import { calculateSplit, createParticipants, parseReceiptImage } from "../lib/api";
 import type { AssignmentsMap, Item, Participant, Step } from "../types/split";
 
 const stepOrder: Step[] = ["upload", "verify", "participants", "assign", "totals"];
@@ -20,6 +20,7 @@ export default function SplitFlow() {
   const [assignments, setAssignments] = useState<AssignmentsMap>({});
   const [isDragging, setIsDragging] = useState(false);
   const [billDescription, setBillDescription] = useState("");
+  const [receiptImageId, setReceiptImageId] = useState<string | null>(null);
 
   const {
     file,
@@ -43,6 +44,7 @@ export default function SplitFlow() {
     setStep("upload");
     setParticipants([]);
     setAssignments({});
+    setReceiptImageId(null);
   }
 
   async function handleParseReceipt() {
@@ -53,11 +55,34 @@ export default function SplitFlow() {
       const data = await parseReceiptImage(file, billDescription.trim(), apiBase);
       setCurrency(data.currency || "USD");
       setItems(data.items);
+      setReceiptImageId(data.receipt_image_id ?? null);
       setStep("verify");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Upload failed.");
     } finally {
       endUpload();
+    }
+  }
+
+  async function handlePersistParticipants() {
+    try {
+      const saved = await createParticipants({
+        participants: participants.map((participant) => participant.name),
+        apiBase,
+      });
+      setParticipants(saved);
+      setStep("assign");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to save participants.");
+    }
+  }
+
+  async function handlePersistAssignments() {
+    try {
+      await calculateSplit({ participants, items, assignments, apiBase });
+      setStep("totals");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to save assignments.");
     }
   }
 
@@ -68,12 +93,20 @@ export default function SplitFlow() {
     setParticipants([]);
     setAssignments({});
     setBillDescription("");
+    setReceiptImageId(null);
     resetUploadState();
   }
 
   return (
     <div className="app">
       <h1 className="h1">Split-It</h1>
+      {error && step !== "upload" && (
+        <div className="alert" style={{ marginBottom: 12 }}>
+          <strong>Request failed</strong>
+          <div>{error}</div>
+        </div>
+      )}
+
       <div className="stepper">
         <p className="stepLabel">Step {stepIndex + 1} of 5</p>
         <div className="progress" aria-hidden>
@@ -168,7 +201,7 @@ export default function SplitFlow() {
           participants={participants}
           onChange={setParticipants}
           onBack={() => setStep("verify")}
-          onNext={() => setStep("assign")}
+          onNext={handlePersistParticipants}
         />
       )}
 
@@ -180,17 +213,16 @@ export default function SplitFlow() {
           assignments={assignments}
           onChange={setAssignments}
           onBack={() => setStep("participants")}
-          onNext={() => setStep("totals")}
+          onNext={handlePersistAssignments}
         />
       )}
 
-      {step === "totals" && (
+      {step === "totals" && receiptImageId && (
         <Totals
           apiBase={apiBase}
           currency={currency}
           items={items}
           participants={participants}
-          assignments={assignments}
           onBack={() => setStep("assign")}
           onReset={resetFlow}
         />

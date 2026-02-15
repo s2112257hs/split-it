@@ -5,7 +5,7 @@ type Props = {
   participants: Participant[];
   onChange: (next: Participant[]) => void;
   onBack?: () => void;
-  onNext?: () => void;
+  onNext?: () => Promise<void> | void;
 };
 
 function makeId() {
@@ -15,6 +15,7 @@ function makeId() {
 export default function Participants({ participants, onChange, onBack, onNext }: Props) {
   const [newName, setNewName] = useState("");
   const [showErrors, setShowErrors] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const normalizedNames = useMemo(() => participants.map((p) => p.name.trim().toLowerCase()), [participants]);
 
@@ -55,7 +56,7 @@ export default function Participants({ participants, onChange, onBack, onNext }:
             if (e.key === "Enter") addParticipant();
           }}
         />
-        <button className="btn btnPrimary" onClick={addParticipant} disabled={!newName.trim()}>Add</button>
+        <button className="btn btnPrimary" onClick={addParticipant} disabled={!newName.trim() || isSaving}>Add</button>
       </div>
 
       <div className="participantsPanel">
@@ -75,8 +76,9 @@ export default function Participants({ participants, onChange, onBack, onNext }:
                     className={`input ${showErrors && err ? "inputError" : ""}`}
                     value={p.name}
                     onChange={(e) => onChange(participants.map((x) => (x.id === p.id ? { ...x, name: e.target.value } : x)))}
+                    disabled={isSaving}
                   />
-                  <button className="btn btnDanger" onClick={() => onChange(participants.filter((x) => x.id !== p.id))}>
+                  <button className="btn btnDanger" onClick={() => onChange(participants.filter((x) => x.id !== p.id))} disabled={isSaving}>
                     Remove
                   </button>
                 </div>
@@ -88,19 +90,25 @@ export default function Participants({ participants, onChange, onBack, onNext }:
       </div>
 
       <div className="actionsFooter actionsFooterSticky">
-        {onBack ? <button className="btn" onClick={onBack}>Back</button> : <span />}
+        {onBack ? <button className="btn" onClick={onBack} disabled={isSaving}>Back</button> : <span />}
         {onNext && (
           <button
             className="btn btnPrimary"
-            onClick={() => {
+            disabled={isSaving}
+            onClick={async () => {
               if (!canNext) {
                 setShowErrors(true);
                 return;
               }
-              onNext();
+              setIsSaving(true);
+              try {
+                await onNext();
+              } finally {
+                setIsSaving(false);
+              }
             }}
           >
-            Next
+            {isSaving ? "Saving…" : "Next"}
           </button>
         )}
       </div>
