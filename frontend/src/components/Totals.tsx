@@ -5,6 +5,7 @@ import type { AssignmentsMap, Participant } from "../types/split";
 
 type Props = {
   apiBase: string;
+  receiptImageId: string;
   currency: string;
   items: Array<{ id: string; description: string; price_cents: number }>;
   participants: Participant[];
@@ -13,7 +14,7 @@ type Props = {
   onReset?: () => void;
 };
 
-export default function Totals({ apiBase, currency, items, participants, assignments, onBack, onReset }: Props) {
+export default function Totals({ apiBase, receiptImageId, currency, items, participants, assignments, onBack, onReset }: Props) {
   const [copied, setCopied] = useState(false);
   const [totalsByParticipantId, setTotalsByParticipantId] = useState<Record<string, number>>({});
   const [assignedTotalCents, setAssignedTotalCents] = useState(0);
@@ -35,7 +36,7 @@ export default function Totals({ apiBase, currency, items, participants, assignm
       setError(null);
 
       try {
-        const result = await calculateSplit({ participants, items, assignments, apiBase });
+        const result = await calculateSplit({ receiptImageId, participants, assignments, apiBase });
 
         if (!isActive) return;
         setTotalsByParticipantId(result.totals_by_participant_id);
@@ -53,7 +54,7 @@ export default function Totals({ apiBase, currency, items, participants, assignm
     return () => {
       isActive = false;
     };
-  }, [participants, items, assignments, apiBase]);
+  }, [participants, assignments, apiBase, receiptImageId]);
 
   const sumPerPerson = useMemo(
     () => participants.reduce((sum, participant) => sum + (totalsByParticipantId[participant.id] ?? 0), 0),
@@ -101,7 +102,7 @@ export default function Totals({ apiBase, currency, items, participants, assignm
           <tbody>
             {participants.map((participant) => (
               <tr key={participant.id}>
-                <td>{participant.name}</td>
+                <td>{participant.display_name}</td>
                 <td style={{ textAlign: "right" }}>{centsToUsdString(totalsByParticipantId[participant.id] ?? 0)}</td>
               </tr>
             ))}
@@ -120,7 +121,7 @@ export default function Totals({ apiBase, currency, items, participants, assignm
           className="btn"
           onClick={async () => {
             const lines = participants.map(
-              (participant) => `${participant.name} — ${centsToUsdString(totalsByParticipantId[participant.id] ?? 0)} ${currency}`
+              (participant) => `${participant.display_name} — ${centsToUsdString(totalsByParticipantId[participant.id] ?? 0)} ${currency}`
             );
             lines.push(`Total — ${centsToUsdString(assignedTotalCents)} ${currency}`);
             await navigator.clipboard.writeText(lines.join("\n"));
