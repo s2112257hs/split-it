@@ -1,8 +1,9 @@
 import type { ApiError, OcrResponse } from "../types/split";
 
-export async function parseReceiptImage(file: File, apiBase: string): Promise<OcrResponse> {
+export async function parseReceiptImage(file: File, description: string, apiBase: string): Promise<OcrResponse> {
   const form = new FormData();
   form.append("image", file);
+  form.append("description", description);
 
   const response = await fetch(`${apiBase}/api/ocr`, {
     method: "POST",

@@ -16,6 +16,7 @@ export type Step = "upload" | "verify" | "participants" | "assign" | "totals";
 export type OcrResponse = {
   items: Item[];
   currency: string;
+  receipt_image_id?: string | null;
 };
 
 export type ApiError = {

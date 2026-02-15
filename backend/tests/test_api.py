@@ -31,11 +31,19 @@ def test_ocr_missing_file(client):
     assert r.get_json()["error"]["code"] == "bad_request"
 
 
+def test_ocr_missing_description(client):
+    data = {"image": (io.BytesIO(b"fake-image-bytes"), "receipt.png")}
+    r = client.post("/api/ocr", data=data, content_type="multipart/form-data")
+    assert r.status_code == 400
+    assert "description" in r.get_json()["error"]["message"].lower()
+
+
 def test_ocr_empty_file(client, monkeypatch):
     # Patch OCR so it would work if bytes existed
     monkeypatch.setattr("app.services.ocr_service.run_ocr", lambda b: "Coke 3.50")
 
     data = {
+        "description": "Office lunch",
         "image": (io.BytesIO(b""), "receipt.png"),
     }
     r = client.post("/api/ocr", data=data, content_type="multipart/form-data")
@@ -50,11 +58,12 @@ def test_ocr_happy_path_parses_items(client, monkeypatch):
         lambda b: "Chicken Burger 12.99\nCoke 3.50\nTOTAL 16.49\n",
     )
 
-    data = {"image": (io.BytesIO(b"fake-image-bytes"), "receipt.png")}
+    data = {"description": "Dinner with team", "image": (io.BytesIO(b"fake-image-bytes"), "receipt.png")}
     r = client.post("/api/ocr", data=data, content_type="multipart/form-data")
     assert r.status_code == 200
     body = r.get_json()
     assert body["currency"] == "USD"
+    assert body["receipt_image_id"] is None
     assert body["items"] == [
         {"id": "i0", "description": "Chicken Burger", "price_cents": 1299},
         {"id": "i1", "description": "Coke", "price_cents": 350},

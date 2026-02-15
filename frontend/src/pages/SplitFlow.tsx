@@ -19,6 +19,7 @@ export default function SplitFlow() {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [assignments, setAssignments] = useState<AssignmentsMap>({});
   const [isDragging, setIsDragging] = useState(false);
+  const [billDescription, setBillDescription] = useState("");
 
   const {
     file,
@@ -49,7 +50,7 @@ export default function SplitFlow() {
     beginUpload();
 
     try {
-      const data = await parseReceiptImage(file, apiBase);
+      const data = await parseReceiptImage(file, billDescription.trim(), apiBase);
       setCurrency(data.currency || "USD");
       setItems(data.items);
       setStep("verify");
@@ -66,6 +67,7 @@ export default function SplitFlow() {
     setItems([]);
     setParticipants([]);
     setAssignments({});
+    setBillDescription("");
     resetUploadState();
   }
 
@@ -83,8 +85,20 @@ export default function SplitFlow() {
         <div className="card formCard stack">
           <div>
             <h2 className="stepTitle">Step 1 — Upload receipt</h2>
-            <div className="helper">Upload → Preview → Parse</div>
+            <div className="helper">Upload → Add bill description → Preview → Parse</div>
           </div>
+
+
+          <label className="stack" style={{ gap: 6 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Bill description</span>
+            <input
+              className="input"
+              value={billDescription}
+              onChange={(e) => setBillDescription(e.target.value)}
+              placeholder="Dinner at Joe's"
+              disabled={isUploading}
+            />
+          </label>
 
           <input
             ref={fileRef}
@@ -126,7 +140,7 @@ export default function SplitFlow() {
             </div>
           )}
 
-          <button onClick={handleParseReceipt} disabled={!canParse} className="btn btnPrimary">
+          <button onClick={handleParseReceipt} disabled={!canParse || !billDescription.trim()} className="btn btnPrimary">
             {isUploading ? "Parsing…" : "Parse receipt"}
           </button>
 
