@@ -7,6 +7,18 @@ import type {
   Participant,
 } from "../types/split";
 
+async function parseApiError(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    const errJson = (await response.json()) as ApiError;
+    return errJson?.error?.message || `Request failed (${response.status})`;
+  }
+
+  const text = await response.text();
+  return text || `Request failed (${response.status})`;
+}
+
 export async function parseReceiptImage(file: File, description: string, apiBase: string): Promise<OcrResponse> {
   const form = new FormData();
   form.append("image", file);
@@ -65,4 +77,30 @@ export async function calculateSplit(args: {
   }
 
   return data;
+}
+
+export async function createParticipants(args: {
+  participants: string[];
+  apiBase: string;
+}): Promise<Participant[]> {
+  const { participants, apiBase } = args;
+
+  const response = await fetch(`${apiBase}/api/participants`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ participants }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response));
+  }
+
+  const data = (await response.json()) as { participants?: Participant[] };
+  if (!data || !Array.isArray(data.participants)) {
+    throw new Error("Unexpected response from /api/participants.");
+  }
+
+  return data.participants;
 }

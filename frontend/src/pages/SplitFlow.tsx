@@ -20,7 +20,6 @@ export default function SplitFlow() {
   const [assignments, setAssignments] = useState<AssignmentsMap>({});
   const [isDragging, setIsDragging] = useState(false);
   const [billDescription, setBillDescription] = useState("");
-  const [receiptImageId, setReceiptImageId] = useState<string | null>(null);
 
   const {
     file,
@@ -44,7 +43,6 @@ export default function SplitFlow() {
     setStep("upload");
     setParticipants([]);
     setAssignments({});
-    setReceiptImageId(null);
   }
 
   async function handleParseReceipt() {
@@ -55,7 +53,6 @@ export default function SplitFlow() {
       const data = await parseReceiptImage(file, billDescription.trim(), apiBase);
       setCurrency(data.currency || "USD");
       setItems(data.items);
-      setReceiptImageId(data.receipt_image_id ?? null);
       setStep("verify");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Upload failed.");
@@ -93,7 +90,6 @@ export default function SplitFlow() {
     setParticipants([]);
     setAssignments({});
     setBillDescription("");
-    setReceiptImageId(null);
     resetUploadState();
   }
 
@@ -217,12 +213,13 @@ export default function SplitFlow() {
         />
       )}
 
-      {step === "totals" && receiptImageId && (
+      {step === "totals" && (
         <Totals
           apiBase={apiBase}
           currency={currency}
           items={items}
           participants={participants}
+          assignments={assignments}
           onBack={() => setStep("assign")}
           onReset={resetFlow}
         />
