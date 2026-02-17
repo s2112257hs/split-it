@@ -125,6 +125,80 @@ def test_list_participants(client, monkeypatch):
     }
 
 
+
+
+def test_get_running_balances_groups_bills_and_totals(client, monkeypatch):
+    class ParticipantRow:
+        def __init__(self, participant_id, participant_name, lines):
+            self.participant_id = participant_id
+            self.participant_name = participant_name
+            self.lines = lines
+
+    class Line:
+        def __init__(self, receipt_id, bill_description, receipt_item_id, item_name, contribution_cents):
+            self.receipt_id = receipt_id
+            self.bill_description = bill_description
+            self.receipt_item_id = receipt_item_id
+            self.item_name = item_name
+            self.contribution_cents = contribution_cents
+
+    class FakeRepo:
+        enabled = True
+
+        def list_running_balance_participants(self):
+            return [
+                ParticipantRow(
+                    "p-alice",
+                    "Alice",
+                    [
+                        Line("r2", "Dinner", "i2", "Steak", 1500),
+                        Line("r2", "Dinner", "i3", "Soda", 300),
+                        Line("r1", "Lunch", "i1", "Soup", 700),
+                    ],
+                ),
+                ParticipantRow("p-bob", "Bob", []),
+            ]
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/running-balances")
+
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "participants": [
+            {
+                "participant_id": "p-alice",
+                "participant_name": "Alice",
+                "participant_total_cents": 2500,
+                "bills": [
+                    {
+                        "receipt_id": "r2",
+                        "bill_description": "Dinner",
+                        "bill_total_cents": 1800,
+                        "lines": [
+                            {"receipt_item_id": "i2", "item_name": "Steak", "contribution_cents": 1500},
+                            {"receipt_item_id": "i3", "item_name": "Soda", "contribution_cents": 300},
+                        ],
+                    },
+                    {
+                        "receipt_id": "r1",
+                        "bill_description": "Lunch",
+                        "bill_total_cents": 700,
+                        "lines": [
+                            {"receipt_item_id": "i1", "item_name": "Soup", "contribution_cents": 700},
+                        ],
+                    },
+                ],
+            },
+            {
+                "participant_id": "p-bob",
+                "participant_name": "Bob",
+                "participant_total_cents": 0,
+                "bills": [],
+            },
+        ]
+    }
+
 def test_create_participant_returns_existing_or_new(client, monkeypatch):
     class Row:
         id = "22222222-2222-2222-2222-222222222222"
