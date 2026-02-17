@@ -8,13 +8,7 @@ try:
 except ImportError:  # pragma: no cover
     psycopg = None
 
-
-@dataclass(frozen=True)
-class ParsedItem:
-    description: str
-    price_cents: int
-
-
+from app.services.receipt_parser import ParsedItem
 @dataclass(frozen=True)
 class ReceiptItemRecord:
     id: str
