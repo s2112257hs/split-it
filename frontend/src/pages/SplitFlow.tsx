@@ -45,6 +45,26 @@ export default function SplitFlow({ onBackHome }: Props) {
 
   const stepIndex = stepOrder.indexOf(step);
 
+  function expandItemsForQuantity(sourceItems: Item[]): Item[] {
+    return sourceItems.flatMap((item) => {
+      const quantity = Number.isInteger(item.quantity) && item.quantity >= 1 ? item.quantity : 1;
+      if (quantity === 1) {
+        return [{ ...item, quantity: 1 }];
+      }
+
+      const base = Math.floor(item.price_cents / quantity);
+      const rem = item.price_cents % quantity;
+
+      return Array.from({ length: quantity }, (_, index) => ({
+        ...item,
+        id: `${item.id}_unit_${index + 1}`,
+        description: `${item.description} (${index + 1}/${quantity})`,
+        price_cents: base + (index < rem ? 1 : 0),
+        quantity: 1,
+      }));
+    });
+  }
+
   function handlePickFile(nextFile: File | null) {
     pickFile(nextFile);
     setItems([]);
@@ -63,7 +83,7 @@ export default function SplitFlow({ onBackHome }: Props) {
     try {
       const data = await createReceipt(file, billDescription.trim(), apiBase);
       setCurrency(data.currency || "USD");
-      setItems(data.items.map((item) => ({ id: item.temp_id, description: item.description, price_cents: item.price_cents })));
+      setItems(data.items.map((item) => ({ id: item.temp_id, description: item.description, price_cents: item.price_cents, quantity: 1 })));
       setReceiptImageId(data.receipt_image_id);
       setStep("verify");
     } catch (e: unknown) {
@@ -79,13 +99,14 @@ export default function SplitFlow({ onBackHome }: Props) {
     try {
       const persisted = await replaceReceiptItems({
         receiptImageId,
-        items: items.map((item) => ({ id: null, description: item.description, price_cents: item.price_cents })),
+        items: expandItemsForQuantity(items).map((item) => ({ id: null, description: item.description, price_cents: item.price_cents })),
         apiBase,
       });
-      setItems(persisted);
+      setItems(persisted.map((item) => ({ ...item, quantity: 1 })));
       const existing = await listParticipants(apiBase);
       setAllParticipants(existing);
       setSelectedParticipantIds([]);
+      setAssignments({});
       setStep("participants");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save items.");

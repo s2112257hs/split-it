@@ -2,6 +2,7 @@ export type Item = {
   id: string;
   description: string;
   price_cents: number;
+  quantity: number;
 };
 
 export type PreviewItem = {
