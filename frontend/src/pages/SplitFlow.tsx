@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Assignments from "../components/Assignments";
 import ItemsTable from "../components/ItemsTable";
 import Participants from "../components/Participants";
@@ -9,6 +9,14 @@ import type { AssignmentsMap, Item, Participant, Step } from "../types/split";
 
 const stepOrder: Step[] = ["upload", "verify", "participants", "assign", "totals"];
 
+function makeLocalParticipantId() {
+  return `local_${crypto.randomUUID()}`;
+}
+
+function isLocalParticipantId(participantId: string): boolean {
+  return participantId.startsWith("local_");
+}
+
 export default function SplitFlow() {
   const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -16,11 +24,17 @@ export default function SplitFlow() {
   const [step, setStep] = useState<Step>("upload");
   const [currency, setCurrency] = useState<string>("USD");
   const [items, setItems] = useState<Item[]>([]);
-  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([]);
   const [assignments, setAssignments] = useState<AssignmentsMap>({});
   const [isDragging, setIsDragging] = useState(false);
   const [billDescription, setBillDescription] = useState("");
   const [receiptImageId, setReceiptImageId] = useState<string | null>(null);
+
+  const selectedParticipants = useMemo(
+    () => allParticipants.filter((participant) => selectedParticipantIds.includes(participant.id)),
+    [allParticipants, selectedParticipantIds]
+  );
 
   const {
     file,
@@ -42,7 +56,8 @@ export default function SplitFlow() {
     setItems([]);
     setCurrency("USD");
     setStep("upload");
-    setParticipants([]);
+    setAllParticipants([]);
+    setSelectedParticipantIds([]);
     setAssignments({});
     setReceiptImageId(null);
   }
@@ -75,20 +90,48 @@ export default function SplitFlow() {
       });
       setItems(persisted);
       const existing = await listParticipants(apiBase);
-      setParticipants(existing);
+      setAllParticipants(existing);
+      setSelectedParticipantIds([]);
       setStep("participants");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save items.");
     }
   }
 
+  function handleAddParticipant(displayName: string) {
+    const participant: Participant = {
+      id: makeLocalParticipantId(),
+      display_name: displayName,
+      running_total_cents: 0,
+    };
+
+    setAllParticipants((prev) => [...prev, participant]);
+    setSelectedParticipantIds((prev) => [...prev, participant.id]);
+  }
+
   async function handlePersistParticipants() {
     try {
-      const created = await Promise.all(
-        participants.map((participant) => createParticipant({ display_name: participant.display_name, apiBase }))
+      const selected = allParticipants.filter((participant) => selectedParticipantIds.includes(participant.id));
+
+      const persistedSelected = await Promise.all(
+        selected.map(async (participant) => {
+          if (!isLocalParticipantId(participant.id)) {
+            return participant;
+          }
+          return createParticipant({ display_name: participant.display_name, apiBase });
+        })
       );
-      const uniqueById = new Map(created.map((participant) => [participant.id, participant]));
-      setParticipants([...uniqueById.values()]);
+
+      const refreshedAll = await listParticipants(apiBase);
+      setAllParticipants(refreshedAll);
+
+      const selectedByName = new Set(persistedSelected.map((participant) => participant.display_name.trim().toLowerCase()));
+      setSelectedParticipantIds(
+        refreshedAll
+          .filter((participant) => selectedByName.has(participant.display_name.trim().toLowerCase()))
+          .map((participant) => participant.id)
+      );
+
       setStep("assign");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save participants.");
@@ -99,7 +142,7 @@ export default function SplitFlow() {
     if (!receiptImageId) return;
 
     try {
-      await calculateSplit({ receiptImageId, participants, assignments, apiBase });
+      await calculateSplit({ receiptImageId, participants: selectedParticipants, assignments, apiBase });
       setStep("totals");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save assignments.");
@@ -110,7 +153,8 @@ export default function SplitFlow() {
     setStep("upload");
     setCurrency("USD");
     setItems([]);
-    setParticipants([]);
+    setAllParticipants([]);
+    setSelectedParticipantIds([]);
     setAssignments({});
     setBillDescription("");
     setReceiptImageId(null);
@@ -218,8 +262,10 @@ export default function SplitFlow() {
 
       {step === "participants" && (
         <Participants
-          participants={participants}
-          onChange={setParticipants}
+          participants={allParticipants}
+          selectedParticipantIds={selectedParticipantIds}
+          onSelectionChange={setSelectedParticipantIds}
+          onAddParticipant={handleAddParticipant}
           onBack={() => setStep("verify")}
           onNext={handlePersistParticipants}
         />
@@ -229,7 +275,7 @@ export default function SplitFlow() {
         <Assignments
           currency={currency}
           items={items}
-          participants={participants}
+          participants={selectedParticipants}
           assignments={assignments}
           onChange={setAssignments}
           onBack={() => setStep("participants")}
@@ -243,7 +289,7 @@ export default function SplitFlow() {
           receiptImageId={receiptImageId}
           currency={currency}
           items={items}
-          participants={participants}
+          participants={selectedParticipants}
           assignments={assignments}
           onBack={() => setStep("assign")}
           onReset={resetFlow}
