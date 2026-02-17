@@ -6,16 +6,9 @@ import Totals from "../components/Totals";
 import { useReceiptUpload } from "../hooks/useReceiptUpload";
 import { calculateSplit, createParticipant, createReceipt, listParticipants, replaceReceiptItems } from "../lib/api";
 import type { AssignmentsMap, Item, Participant, Step } from "../types/split";
+import { isLocalParticipantId, makeLocalParticipantId } from "../utils/participantIds";
 
 const stepOrder: Step[] = ["upload", "verify", "participants", "assign", "totals"];
-
-function makeLocalParticipantId() {
-  return `local_${crypto.randomUUID()}`;
-}
-
-function isLocalParticipantId(participantId: string): boolean {
-  return participantId.startsWith("local_");
-}
 
 export default function SplitFlow() {
   const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";

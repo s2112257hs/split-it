@@ -1,41 +1,23 @@
 import type {
-  ApiError,
   AssignmentsMap,
   CalculateSplitResponse,
   CreateReceiptResponse,
   Item,
   Participant,
 } from "../types/split";
-
-async function parseApiError(response: Response): Promise<string> {
-  const contentType = response.headers.get("content-type") || "";
-
-  if (contentType.includes("application/json")) {
-    const errJson = (await response.json()) as ApiError;
-    return errJson?.error?.message || `Request failed (${response.status})`;
-  }
-
-  const text = await response.text();
-  return text || `Request failed (${response.status})`;
-}
+import { requestJson } from "./http";
 
 export async function createReceipt(file: File, description: string, apiBase: string): Promise<CreateReceiptResponse> {
   const form = new FormData();
   form.append("image", file);
   form.append("description", description);
 
-  const response = await fetch(`${apiBase}/api/receipts`, {
+  const data = await requestJson<CreateReceiptResponse>(`${apiBase}/api/receipts`, {
     method: "POST",
     body: form,
   });
 
-  if (!response.ok) {
-    throw new Error(await parseApiError(response));
-  }
-
-  const data = (await response.json()) as CreateReceiptResponse;
-
-  if (!data || !Array.isArray(data.items) || typeof data.receipt_image_id !== "string") {
+  if (!Array.isArray(data.items) || typeof data.receipt_image_id !== "string") {
     throw new Error("Unexpected response from /api/receipts.");
   }
 
@@ -49,7 +31,7 @@ export async function replaceReceiptItems(args: {
 }): Promise<Item[]> {
   const { receiptImageId, items, apiBase } = args;
 
-  const response = await fetch(`${apiBase}/api/receipts/${receiptImageId}/items`, {
+  const data = await requestJson<{ items?: Item[] }>(`${apiBase}/api/receipts/${receiptImageId}/items`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -57,12 +39,7 @@ export async function replaceReceiptItems(args: {
     body: JSON.stringify({ items }),
   });
 
-  if (!response.ok) {
-    throw new Error(await parseApiError(response));
-  }
-
-  const data = (await response.json()) as { items?: Item[] };
-  if (!data || !Array.isArray(data.items)) {
+  if (!Array.isArray(data.items)) {
     throw new Error("Unexpected response from /api/receipts/{receipt_image_id}/items.");
   }
 
@@ -77,7 +54,7 @@ export async function calculateSplit(args: {
 }): Promise<CalculateSplitResponse> {
   const { receiptImageId, participants, assignments, apiBase } = args;
 
-  const response = await fetch(`${apiBase}/api/receipts/${receiptImageId}/split`, {
+  const data = await requestJson<CalculateSplitResponse>(`${apiBase}/api/receipts/${receiptImageId}/split`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -85,13 +62,7 @@ export async function calculateSplit(args: {
     body: JSON.stringify({ participants: participants.map((p) => p.id), assignments }),
   });
 
-  if (!response.ok) {
-    throw new Error(await parseApiError(response));
-  }
-
-  const data = (await response.json()) as CalculateSplitResponse;
-
-  if (!data || typeof data.grand_total_cents !== "number" || !data.totals_by_participant_id) {
+  if (typeof data.grand_total_cents !== "number" || !data.totals_by_participant_id) {
     throw new Error("Unexpected response from /api/receipts/{receipt_image_id}/split.");
   }
 
@@ -99,13 +70,8 @@ export async function calculateSplit(args: {
 }
 
 export async function listParticipants(apiBase: string): Promise<Participant[]> {
-  const response = await fetch(`${apiBase}/api/participants`);
-  if (!response.ok) {
-    throw new Error(await parseApiError(response));
-  }
-
-  const data = (await response.json()) as { participants?: Participant[] };
-  if (!data || !Array.isArray(data.participants)) {
+  const data = await requestJson<{ participants?: Participant[] }>(`${apiBase}/api/participants`);
+  if (!Array.isArray(data.participants)) {
     throw new Error("Unexpected response from /api/participants.");
   }
 
@@ -113,17 +79,11 @@ export async function listParticipants(apiBase: string): Promise<Participant[]> 
 }
 
 export async function createParticipant(args: { display_name: string; apiBase: string }): Promise<Participant> {
-  const response = await fetch(`${args.apiBase}/api/participants`, {
+  return requestJson<Participant>(`${args.apiBase}/api/participants`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ display_name: args.display_name }),
   });
-
-  if (!response.ok) {
-    throw new Error(await parseApiError(response));
-  }
-
-  return (await response.json()) as Participant;
 }
