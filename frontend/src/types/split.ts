@@ -45,3 +45,21 @@ export type CalculateSplitResponse = {
     amount_cents: number;
   }>;
 };
+
+export type ParticipantLedgerLine = {
+  receipt_item_id: string;
+  item_description: string;
+  amount_cents: number;
+};
+
+export type ParticipantLedgerBill = {
+  receipt_image_id: string;
+  bill_description: string;
+  lines: ParticipantLedgerLine[];
+};
+
+export type ParticipantLedger = {
+  participant_id: string;
+  computed_total_cents: number;
+  bills: ParticipantLedgerBill[];
+};
