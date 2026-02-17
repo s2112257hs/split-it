@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Dict, List
 from uuid import UUID
 
 from flask import Blueprint, current_app, jsonify, request
 
 from app.db.repository import ItemAllocation, ParsedItem, SplitItRepository
 from app.domain.split_logic import SplitLogicError, split_cents_fair_remainder
-from app.services.receipt_parser import (
-    ReceiptParseError,
-    extract_items_from_ocr_text,
-)
-
-# OCR service should provide: run_ocr(image_bytes: bytes) -> str
-# In tests we monkeypatch this so it doesn't require OCR deps.
 from app.services import ocr_service
+from app.services.receipt_parser import ReceiptParseError, extract_items_from_ocr_text
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -40,16 +34,8 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
-@api_bp.post("/ocr")
-def ocr_endpoint():
-    """
-    multipart/form-data:
-      - image: file (png/jpg)
-      - description: string
-    Response:
-      - items: [{id, description, price_cents}]
-      - receipt_image_id: uuid | null
-    """
+@api_bp.post("/receipts")
+def create_receipt_from_image():
     if "image" not in request.files:
         return _json_error("Missing file field 'image'.", status=400)
 
@@ -65,240 +51,305 @@ def ocr_endpoint():
     if not image_bytes:
         return _json_error("Uploaded file is empty.", status=400)
 
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    owner_id = request.form.get("owner_id", "").strip() or current_app.config.get("RECEIPT_OWNER_ID", "mvp-owner")
+
+    try:
+        receipt_image_id = repo.create_receipt_image(owner_id=owner_id, description=description, image_bytes=image_bytes)
+    except Exception:
+        return _json_error("Failed to persist receipt image.", status=500, code="db_error")
+
     try:
         ocr_text = ocr_service.run_ocr(image_bytes)
-    except Exception:
+        parsed_items = extract_items_from_ocr_text(ocr_text)
+    except Exception as exc:
+        if isinstance(exc, ReceiptParseError):
+            return _json_error("Failed to parse receipt text.", status=422, code="parse_failed")
         return _json_error("OCR failed.", status=500, code="ocr_failed")
 
-    try:
-        parsed = extract_items_from_ocr_text(ocr_text)
-    except ReceiptParseError:
-        return _json_error("Failed to parse receipt text.", status=422, code="parse_failed")
+    return (
+        jsonify(
+            {
+                "receipt_image_id": receipt_image_id,
+                "currency": "USD",
+                "items": [
+                    {"temp_id": f"t{idx}", "description": item.description, "price_cents": item.price_cents}
+                    for idx, item in enumerate(parsed_items)
+                ],
+            }
+        ),
+        200,
+    )
 
-    receipt_image_id = None
-    item_ids = [f"i{idx}" for idx in range(len(parsed))]
+
+@api_bp.put("/receipts/<receipt_image_id>/items")
+def replace_receipt_items(receipt_image_id: str):
+    if not _is_uuid(receipt_image_id):
+        return _json_error("Invalid receipt_image_id.", status=400)
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return _json_error("Request body must be JSON.", status=400)
+
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list):
+        return _json_error("'items' must be a list.", status=400)
+
+    parsed_items: list[ParsedItem] = []
+    for idx, raw_item in enumerate(raw_items):
+        if not isinstance(raw_item, dict):
+            return _json_error(f"Item at index {idx} must be an object.", status=400)
+
+        description = raw_item.get("description")
+        price_cents = raw_item.get("price_cents")
+
+        if not isinstance(description, str) or not description.strip():
+            return _json_error(f"Item at index {idx} must include a non-empty 'description'.", status=400)
+        if not isinstance(price_cents, int) or price_cents < 0:
+            return _json_error(f"Item at index {idx} must include 'price_cents' as int >= 0.", status=400)
+
+        parsed_items.append(ParsedItem(description=description.strip(), price_cents=price_cents))
 
     repo = _repo()
-    if repo.enabled:
-        try:
-            receipt_image_id, item_ids = repo.create_receipt_with_items(
-                owner_id=current_app.config.get("RECEIPT_OWNER_ID", "mvp-owner"),
-                description=description,
-                image_bytes=image_bytes,
-                items=[ParsedItem(description=it.description, price_cents=it.price_cents) for it in parsed],
-            )
-        except Exception:
-            return _json_error("Failed to persist receipt to database.", status=500, code="db_error")
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
 
-    items = [
-        {"id": item_ids[idx], "description": it.description, "price_cents": it.price_cents}
-        for idx, it in enumerate(parsed)
-    ]
-    return jsonify({"items": items, "currency": "USD", "receipt_image_id": receipt_image_id}), 200
+    try:
+        inserted = repo.replace_receipt_items(receipt_image_id=receipt_image_id, items=parsed_items)
+    except Exception:
+        return _json_error("Failed to persist receipt items.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "receipt_image_id": receipt_image_id,
+                "items": [
+                    {"id": item.id, "description": item.description, "price_cents": item.price_cents}
+                    for item in inserted
+                ],
+            }
+        ),
+        200,
+    )
 
 
+@api_bp.get("/participants")
+def list_participants():
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        participants = repo.list_participants()
+    except Exception:
+        return _json_error("Failed to fetch participants.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "participants": [
+                    {
+                        "id": participant.id,
+                        "display_name": participant.display_name,
+                        "running_total_cents": participant.running_total_cents,
+                    }
+                    for participant in participants
+                ]
+            }
+        ),
+        200,
+    )
 
 
 @api_bp.post("/participants")
-def participants_endpoint():
+def create_participant():
+    data = request.get_json(silent=True)
+    if data is None:
+        return _json_error("Request body must be JSON.", status=400)
+
+    display_name = data.get("display_name")
+    if not isinstance(display_name, str) or not display_name.strip():
+        return _json_error("'display_name' must be a non-empty string.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        participant = repo.create_or_get_participant(display_name=display_name.strip())
+    except Exception:
+        return _json_error("Failed to persist participant.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "id": participant.id,
+                "display_name": participant.display_name,
+                "running_total_cents": participant.running_total_cents,
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.delete("/participants/<participant_id>")
+def delete_participant(participant_id: str):
+    if not _is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        if repo.participant_has_allocations(participant_id=participant_id):
+            return _json_error(
+                "Cannot delete participant because they have existing allocations.",
+                status=409,
+                code="participant_has_allocations",
+            )
+
+        deleted = repo.delete_participant(participant_id=participant_id)
+    except Exception:
+        return _json_error("Failed to delete participant.", status=500, code="db_error")
+
+    if not deleted:
+        return _json_error("Participant not found.", status=404, code="not_found")
+
+    return jsonify({"deleted": True}), 200
+
+
+@api_bp.post("/receipts/<receipt_image_id>/split")
+def split_receipt(receipt_image_id: str):
+    if not _is_uuid(receipt_image_id):
+        return _json_error("Invalid receipt_image_id.", status=400)
+
     data = request.get_json(silent=True)
     if data is None:
         return _json_error("Request body must be JSON.", status=400)
 
     participants = data.get("participants")
-    if not isinstance(participants, list) or not participants:
-        return _json_error("'participants' must be a non-empty list.", status=400)
-
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw_name in participants:
-        if not isinstance(raw_name, str):
-            return _json_error("Each participant must be a string name.", status=400)
-
-        name = raw_name.strip()
-        if not name:
-            return _json_error("Participant names must be non-empty.", status=400)
-
-        key = name.casefold()
-        if key in seen:
-            return _json_error("Participant names must be unique.", status=400)
-
-        seen.add(key)
-        normalized.append(name)
-
-    repo = _repo()
-    if not repo.enabled:
-        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
-
-    try:
-        created = repo.create_participants(participant_names=normalized)
-    except Exception:
-        return _json_error("Failed to persist participants.", status=500, code="db_error")
-
-    return jsonify({"participants": [{"id": row.id, "name": row.name} for row in created]}), 200
-
-
-@api_bp.post("/calculate")
-def calculate_endpoint():
-    data = request.get_json(silent=True)
-    if data is None:
-        return _json_error("Request body must be JSON.", status=400)
-
-    try:
-        participants = data["participants"]
-        items = data["items"]
-        assignments = data["assignments"]
-    except KeyError as e:
-        return _json_error(f"Missing field: {e.args[0]}", status=400)
+    assignments = data.get("assignments")
 
     if not isinstance(participants, list) or not participants:
-        return _json_error("'participants' must be a non-empty list.", status=400)
-    if not isinstance(items, list):
-        return _json_error("'items' must be a list.", status=400)
+        return _json_error("'participants' must be a non-empty list of participant ids.", status=400)
     if not isinstance(assignments, dict):
-        return _json_error("'assignments' must be an object mapping item_id -> participant_ids.", status=400)
+        return _json_error("'assignments' must be an object mapping receipt_item_id -> participant_ids.", status=400)
 
     participant_ids: List[str] = []
-    participant_names: Dict[str, str] = {}
-    for p in participants:
-        if not isinstance(p, dict) or "id" not in p:
-            return _json_error("Each participant must be an object with an 'id'.", status=400)
-        pid = p["id"]
-        if not isinstance(pid, str) or not pid.strip():
-            return _json_error("Participant 'id' must be a non-empty string.", status=400)
-        display_name = p.get("name")
-        if not isinstance(display_name, str) or not display_name.strip():
-            return _json_error("Participant 'name' must be a non-empty string.", status=400)
-
-        if pid in participant_names:
+    seen_participant_ids: set[str] = set()
+    for pid in participants:
+        if not isinstance(pid, str) or not _is_uuid(pid):
+            return _json_error("Each participant id must be a valid UUID string.", status=400)
+        if pid in seen_participant_ids:
             return _json_error("Participant ids must be unique.", status=400)
-
+        seen_participant_ids.add(pid)
         participant_ids.append(pid)
-        participant_names[pid] = display_name.strip()
-
-    items_by_id: Dict[str, Dict[str, Any]] = {}
-    for it in items:
-        if not isinstance(it, dict):
-            return _json_error("Each item must be an object.", status=400)
-        if "id" not in it or "price_cents" not in it:
-            return _json_error("Each item must include 'id' and 'price_cents'.", status=400)
-        iid = it["id"]
-        pc = it["price_cents"]
-        if not isinstance(iid, str) or not iid.strip():
-            return _json_error("Item 'id' must be a non-empty string.", status=400)
-        if not isinstance(pc, int) or pc < 0:
-            return _json_error("Item 'price_cents' must be an int >= 0.", status=400)
-        if iid in items_by_id:
-            return _json_error("Item ids must be unique.", status=400)
-        items_by_id[iid] = it
-
-    totals: Dict[str, int] = {pid: 0 for pid in participant_ids}
-    grand_total = 0
-
-    participant_order = {pid: idx for idx, pid in enumerate(participant_ids)}
-
-    for item_id in assignments:
-        if item_id not in items_by_id:
-            return _json_error(f"Assignment references unknown item id: {item_id}", status=400)
-
-    persistable_allocation_rows: list[ItemAllocation] = []
-
-    for item in items:
-        item_id = item["id"]
-        pids = assignments.get(item_id)
-        if pids is None:
-            continue
-        if not isinstance(pids, list) or not pids:
-            return _json_error(f"Assignment for item {item_id} must be a non-empty list of participant ids.", status=400)
-
-        seen_pids: set[str] = set()
-        for pid in pids:
-            if not isinstance(pid, str) or not pid.strip():
-                return _json_error(f"Assignment for item {item_id} must only include non-empty participant ids.", status=400)
-            if pid in seen_pids:
-                return _json_error(f"Assignment for item {item_id} contains duplicate participant ids.", status=400)
-            if pid not in totals:
-                return _json_error(f"Assignment references unknown participant id: {pid}", status=400)
-            seen_pids.add(pid)
-
-        item_total = items_by_id[item_id]["price_cents"]
-        grand_total += item_total
-
-        try:
-            alloc = split_cents_fair_remainder(item_total, pids, totals, participant_order)
-        except SplitLogicError as e:
-            return _json_error(str(e), status=422, code="split_failed")
-
-        for pid, cents in zip(alloc.participants, alloc.amounts_cents, strict=True):
-            totals[pid] += cents
-            row = ItemAllocation(
-                participant_name=participant_names[pid],
-                receipt_item_id=item_id,
-                amount_cents=cents,
-            )
-            if _is_uuid(item_id):
-                persistable_allocation_rows.append(row)
-
-    if sum(totals.values()) != grand_total:
-        return _json_error("Internal error: totals do not sum to grand total.", status=500, code="internal_mismatch")
-
-    repo = _repo()
-    if repo.enabled and persistable_allocation_rows:
-        try:
-            persisted_names = {row.participant_name for row in persistable_allocation_rows}
-            repo.add_allocations(participant_names=persisted_names, allocations=persistable_allocation_rows)
-        except Exception:
-            return _json_error("Failed to persist allocations.", status=500, code="db_error")
-
-    return jsonify(
-        {
-            "totals_by_participant_id": totals,
-            "grand_total_cents": grand_total,
-        }
-    ), 200
-
-
-@api_bp.post("/summary")
-def summary_endpoint():
-    data = request.get_json(silent=True)
-    if data is None:
-        return _json_error("Request body must be JSON.", status=400)
-
-    receipt_image_id = data.get("receipt_image_id")
-    participant_ids = data.get("participant_ids")
-
-    if not isinstance(receipt_image_id, str) or not receipt_image_id.strip() or not _is_uuid(receipt_image_id):
-        return _json_error("'receipt_image_id' must be a valid UUID string.", status=400)
-
-    if not isinstance(participant_ids, list) or not participant_ids:
-        return _json_error("'participant_ids' must be a non-empty list.", status=400)
-
-    clean_participant_ids: list[str] = []
-    seen: set[str] = set()
-    for participant_id in participant_ids:
-        if not isinstance(participant_id, str) or not participant_id.strip() or not _is_uuid(participant_id):
-            return _json_error("'participant_ids' must contain valid UUID strings.", status=400)
-
-        normalized = participant_id.strip()
-        if normalized in seen:
-            return _json_error("'participant_ids' must be unique.", status=400)
-
-        seen.add(normalized)
-        clean_participant_ids.append(normalized)
 
     repo = _repo()
     if not repo.enabled:
         return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
 
     try:
-        summary_rows = repo.get_summary(receipt_image_id=receipt_image_id, participant_ids=clean_participant_ids)
+        receipt_items = repo.get_receipt_items(receipt_image_id=receipt_image_id)
     except Exception:
-        return _json_error("Failed to load summary.", status=500, code="db_error")
+        return _json_error("Failed to fetch receipt items.", status=500, code="db_error")
 
-    totals_by_participant_id = {row.participant_id: row.total_cents for row in summary_rows}
-    grand_total_cents = sum(totals_by_participant_id.values())
+    items_by_id = {item.id: item for item in receipt_items}
+    if not items_by_id:
+        return _json_error("No persisted receipt items found for this receipt.", status=400)
 
-    return jsonify({
-        "totals_by_participant_id": totals_by_participant_id,
-        "grand_total_cents": grand_total_cents,
-    }), 200
+    for assigned_item_id in assignments:
+        if assigned_item_id not in items_by_id:
+            return _json_error(f"Assignment references unknown item id for this receipt: {assigned_item_id}", status=400)
+
+    for item_id in items_by_id:
+        pids = assignments.get(item_id)
+        if not isinstance(pids, list) or not pids:
+            return _json_error(f"Assignment for item {item_id} must be a non-empty list.", status=400)
+
+    try:
+        db_participants = repo.get_participants_by_ids(participant_ids=participant_ids)
+    except Exception:
+        return _json_error("Failed to fetch participants.", status=500, code="db_error")
+
+    db_participant_ids = {participant.id for participant in db_participants}
+    if db_participant_ids != set(participant_ids):
+        return _json_error("One or more participant ids do not exist.", status=400)
+
+    totals_by_participant_id: Dict[str, int] = {pid: 0 for pid in participant_ids}
+    participant_order = {pid: idx for idx, pid in enumerate(participant_ids)}
+    allocations: list[ItemAllocation] = []
+    grand_total_cents = 0
+
+    for item in receipt_items:
+        selected = assignments[item.id]
+        seen_selected: set[str] = set()
+        for selected_pid in selected:
+            if not isinstance(selected_pid, str) or not _is_uuid(selected_pid):
+                return _json_error(f"Assignment for item {item.id} contains invalid participant id.", status=400)
+            if selected_pid in seen_selected:
+                return _json_error(f"Assignment for item {item.id} contains duplicate participant ids.", status=400)
+            if selected_pid not in totals_by_participant_id:
+                return _json_error(f"Assignment for item {item.id} references participant not in request 'participants'.", status=400)
+            seen_selected.add(selected_pid)
+
+        grand_total_cents += item.price_cents
+
+        try:
+            split_result = split_cents_fair_remainder(
+                item.price_cents,
+                selected,
+                totals_by_participant_id,
+                participant_order,
+            )
+        except SplitLogicError as exc:
+            return _json_error(str(exc), status=422, code="split_failed")
+
+        item_sum = sum(split_result.amounts_cents)
+        if item_sum != item.price_cents:
+            return _json_error(
+                f"Split allocations for item {item.id} do not sum to item price.",
+                status=422,
+                code="split_sum_mismatch",
+            )
+
+        for selected_pid, amount_cents in zip(split_result.participants, split_result.amounts_cents, strict=True):
+            totals_by_participant_id[selected_pid] += amount_cents
+            allocations.append(
+                ItemAllocation(
+                    participant_id=selected_pid,
+                    receipt_item_id=item.id,
+                    amount_cents=amount_cents,
+                )
+            )
+
+    if sum(totals_by_participant_id.values()) != grand_total_cents:
+        return _json_error("Internal error: totals do not sum to grand total.", status=500, code="internal_mismatch")
+
+    try:
+        repo.replace_allocations_for_receipt(receipt_image_id=receipt_image_id, allocations=allocations)
+    except Exception:
+        return _json_error("Failed to persist allocations.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "receipt_image_id": receipt_image_id,
+                "grand_total_cents": grand_total_cents,
+                "totals_by_participant_id": totals_by_participant_id,
+                "allocations": [
+                    {
+                        "participant_id": allocation.participant_id,
+                        "receipt_item_id": allocation.receipt_item_id,
+                        "amount_cents": allocation.amount_cents,
+                    }
+                    for allocation in allocations
+                ],
+            }
+        ),
+        200,
+    )
