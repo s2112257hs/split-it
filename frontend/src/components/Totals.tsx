@@ -92,6 +92,25 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
     }, {});
   }, [allocations]);
 
+  const allocationsByParticipantId = useMemo(() => {
+    return allocations.reduce<Record<string, Array<{ receipt_item_id: string; amount_cents: number }>>>((acc, allocation) => {
+      if (allocation.amount_cents <= 0) {
+        return acc;
+      }
+
+      if (!acc[allocation.participant_id]) {
+        acc[allocation.participant_id] = [];
+      }
+
+      acc[allocation.participant_id].push({
+        receipt_item_id: allocation.receipt_item_id,
+        amount_cents: allocation.amount_cents,
+      });
+
+      return acc;
+    }, {});
+  }, [allocations]);
+
   const sumPerPerson = useMemo(
     () => participants.reduce((sum, participant) => sum + (totalsByParticipantId[participant.id] ?? 0), 0),
     [participants, totalsByParticipantId]
