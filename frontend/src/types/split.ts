@@ -34,6 +34,10 @@ export type CalculateSplitResponse = {
   receipt_image_id: string;
   totals_by_participant_id: Record<string, number>;
   grand_total_cents: number;
+  receipt_items: Array<{
+    id: string;
+    description: string;
+  }>;
   allocations: Array<{
     participant_id: string;
     receipt_item_id: string;
