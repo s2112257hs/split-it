@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { getRunningBalances } from "../lib/api";
 import { centsToUsdString } from "../lib/money";
 import type { RunningBalanceParticipant } from "../types/split";
@@ -47,11 +47,29 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
     [participants]
   );
 
+  const allExpanded =
+    sortedParticipants.length > 0 &&
+    sortedParticipants.every((participant) => Boolean(expandedParticipantIds[participant.participant_id]));
+
+  const setAllExpanded = (expanded: boolean) => {
+    setExpandedParticipantIds(
+      Object.fromEntries(sortedParticipants.map((participant) => [participant.participant_id, expanded]))
+    );
+  };
+
   return (
     <div className="app">
       <h1 className="h1">Running balances</h1>
 
       <div className="card tableCard stack">
+        {!isLoading && !error && sortedParticipants.length > 0 && (
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <button className="btn" type="button" onClick={() => setAllExpanded(!allExpanded)}>
+              {allExpanded ? "Collapse all" : "Expand all"}
+            </button>
+          </div>
+        )}
+
         {isLoading && <div className="helper">Loading participants…</div>}
 
         {error && (
@@ -96,37 +114,46 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
                       {participant.bills.length === 0 ? (
                         <div className="helper">No items yet</div>
                       ) : (
-                        <div className="stack">
-                          {participant.bills.map((bill) => (
-                            <div key={bill.receipt_id} className="stack">
-                              <strong>{bill.bill_description}</strong>
-                              <table className="table" style={{ minWidth: 0 }}>
-                                <thead>
-                                  <tr>
-                                    <th>Item</th>
-                                    <th style={{ textAlign: "right" }}>Contribution</th>
+                        <table className="table" style={{ minWidth: 0 }}>
+                          <thead>
+                            <tr>
+                              <th>Item contribution</th>
+                              <th style={{ textAlign: "right" }}>Bill contribution</th>
+                              <th style={{ textAlign: "right" }}>Participant contribution</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {participant.bills.map((bill) => (
+                              <Fragment key={bill.receipt_id}>
+                                <tr key={`${bill.receipt_id}-header`}>
+                                  <td colSpan={3}><strong>{bill.bill_description}</strong></td>
+                                </tr>
+                                {bill.lines.map((line) => (
+                                  <tr key={line.receipt_item_id}>
+                                    <td>
+                                      <div className="row" style={{ justifyContent: "space-between" }}>
+                                        <span>{line.item_name}</span>
+                                        <span>{centsToUsdString(line.contribution_cents)}</span>
+                                      </div>
+                                    </td>
+                                    <td style={{ textAlign: "right" }} />
+                                    <td style={{ textAlign: "right" }} />
                                   </tr>
-                                </thead>
-                                <tbody>
-                                  {bill.lines.map((line) => (
-                                    <tr key={line.receipt_item_id}>
-                                      <td>{line.item_name}</td>
-                                      <td style={{ textAlign: "right" }}>{centsToUsdString(line.contribution_cents)}</td>
-                                    </tr>
-                                  ))}
-                                  <tr>
-                                    <td><strong>Bill total</strong></td>
-                                    <td style={{ textAlign: "right" }}><strong>{centsToUsdString(bill.bill_total_cents)}</strong></td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                            </div>
-                          ))}
-                          <div className="row" style={{ justifyContent: "space-between" }}>
-                            <strong>Participant total</strong>
-                            <strong>{centsToUsdString(participant.participant_total_cents)}</strong>
-                          </div>
-                        </div>
+                                ))}
+                                <tr key={`${bill.receipt_id}-total`}>
+                                  <td />
+                                  <td style={{ textAlign: "right" }}><strong>{centsToUsdString(bill.bill_total_cents)}</strong></td>
+                                  <td style={{ textAlign: "right" }} />
+                                </tr>
+                              </Fragment>
+                            ))}
+                            <tr>
+                              <td />
+                              <td />
+                              <td style={{ textAlign: "right" }}><strong>{centsToUsdString(participant.participant_total_cents)}</strong></td>
+                            </tr>
+                          </tbody>
+                        </table>
                       )}
                     </div>
                   )}
