@@ -67,21 +67,9 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
     };
   }, [participants, assignments, apiBase, receiptImageId]);
 
-  const allocationsByParticipantId = useMemo(() => {
-    return allocations.reduce<Record<string, Array<{ receipt_item_id: string; amount_cents: number }>>>((acc, allocation) => {
-      if (allocation.amount_cents <= 0) {
-        return acc;
-      }
-
-      if (!acc[allocation.participant_id]) {
-        acc[allocation.participant_id] = [];
-      }
-
-      acc[allocation.participant_id].push({
-        receipt_item_id: allocation.receipt_item_id,
-        amount_cents: allocation.amount_cents,
-      });
-
+  const allocationAmountByParticipantAndItem = useMemo(() => {
+    return allocations.reduce<Record<string, number>>((acc, allocation) => {
+      acc[`${allocation.participant_id}:${allocation.receipt_item_id}`] = allocation.amount_cents;
       return acc;
     }, {});
   }, [allocations]);
@@ -123,7 +111,6 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
 
       <div className="stack">
         {participants.map((participant) => {
-          const participantAllocations = allocationsByParticipantId[participant.id] ?? [];
           const isExpanded = Boolean(expandedParticipantIds[participant.id]);
 
           return (
@@ -157,18 +144,16 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
                       </tr>
                     </thead>
                     <tbody>
-                      {participantAllocations.length === 0 && (
-                        <tr>
-                          <td colSpan={2} className="helper">No allocated items for this participant.</td>
-                        </tr>
-                      )}
+                      {items.map((item) => {
+                        const allocationAmount = allocationAmountByParticipantAndItem[`${participant.id}:${item.id}`] ?? 0;
 
-                      {participantAllocations.map((allocation) => (
-                        <tr key={`${participant.id}-${allocation.receipt_item_id}`}>
-                          <td>{receiptItemDescriptions[allocation.receipt_item_id] ?? "Unknown item"}</td>
-                          <td style={{ textAlign: "right" }}>{centsToUsdString(allocation.amount_cents)}</td>
-                        </tr>
-                      ))}
+                        return (
+                          <tr key={`${participant.id}-${item.id}`}>
+                            <td>{receiptItemDescriptions[item.id] ?? item.description}</td>
+                            <td style={{ textAlign: "right" }}>{centsToUsdString(allocationAmount)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
