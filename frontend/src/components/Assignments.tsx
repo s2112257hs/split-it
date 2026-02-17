@@ -92,7 +92,7 @@ export default function Assignments({ currency, items, participants, assignments
                           key={p.id}
                           className={`chip ${active ? "chipActive" : ""}`}
                           disabled={isSubmitting}
-                          onClick={async () => {
+                          onClick={() => {
                             const next = active ? selected.filter((id) => id !== p.id) : [...selected, p.id];
                             setItemSelection(it.id, next);
                           }}
