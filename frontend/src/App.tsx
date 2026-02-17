@@ -39,7 +39,7 @@ export default function App() {
   }, []);
 
   if (route === "split") {
-    return <SplitFlow />;
+    return <SplitFlow onBackHome={() => navigate("/", setRoute)} />;
   }
 
   if (route === "balances") {

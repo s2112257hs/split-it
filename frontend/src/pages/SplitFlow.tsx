@@ -3,15 +3,18 @@ import Assignments from "../components/Assignments";
 import ItemsTable from "../components/ItemsTable";
 import Participants from "../components/Participants";
 import Totals from "../components/Totals";
-import UploadReceiptStep from "../components/UploadReceiptStep";
+import UploadReceipt from "../components/UploadReceipt";
 import { useReceiptUpload } from "../hooks/useReceiptUpload";
 import { calculateSplit, createParticipant, createReceipt, listParticipants, replaceReceiptItems } from "../lib/api";
 import type { AssignmentsMap, Item, Participant, Step } from "../types/split";
 import { isLocalParticipantId, makeLocalParticipantId } from "../utils/participantIds";
 
 const stepOrder: Step[] = ["upload", "verify", "participants", "assign", "totals"];
+type Props = {
+  onBackHome: () => void;
+};
 
-export default function SplitFlow() {
+export default function SplitFlow({ onBackHome }: Props) {
   const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
   const [step, setStep] = useState<Step>("upload");
   const [currency, setCurrency] = useState<string>("USD");
@@ -170,7 +173,7 @@ export default function SplitFlow() {
       </div>
 
       {step === "upload" && (
-        <UploadReceiptStep
+        <UploadReceipt
           billDescription={billDescription}
           isUploading={isUploading}
           previewUrl={previewUrl}
@@ -180,6 +183,7 @@ export default function SplitFlow() {
           onBillDescriptionChange={setBillDescription}
           onPickFile={handlePickFile}
           onParseReceipt={handleParseReceipt}
+          onBackHome={onBackHome}
         />
       )}
 

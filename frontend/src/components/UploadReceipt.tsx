@@ -10,9 +10,10 @@ type Props = {
   onBillDescriptionChange: (value: string) => void;
   onPickFile: (file: File | null) => void;
   onParseReceipt: () => void;
+  onBackHome: () => void;
 };
 
-export default function UploadReceiptStep({
+export default function UploadReceipt({
   billDescription,
   isUploading,
   previewUrl,
@@ -22,6 +23,7 @@ export default function UploadReceiptStep({
   onBillDescriptionChange,
   onPickFile,
   onParseReceipt,
+  onBackHome,
 }: Props) {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -83,11 +85,12 @@ export default function UploadReceiptStep({
           </div>
         </div>
       )}
-
-      <button onClick={onParseReceipt} disabled={!canParse || !billDescription.trim()} className="btn btnPrimary">
-        {isUploading ? "Parsing…" : "Parse receipt"}
-      </button>
-
+      <div className="actionsFooter">
+        <button className="btn" onClick={onBackHome}>Back to home</button>
+        <button onClick={onParseReceipt} disabled={!canParse || !billDescription.trim()} className="btn btnPrimary">
+          {isUploading ? "Parsing…" : "Parse receipt"}
+        </button>
+      </div>
       {error && (
         <div className="alert">
           <strong>Couldn’t parse the receipt</strong>
