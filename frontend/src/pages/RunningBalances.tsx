@@ -3,6 +3,19 @@ import { getParticipantLedger, listParticipants } from "../lib/api";
 import { centsToUsdString } from "../lib/money";
 import type { Participant, ParticipantLedger } from "../types/split";
 
+const CSV_HEADERS = ["participant_name", "bill_description", "item_name", "contribution_usd"];
+
+function escapeCsvField(value: string): string {
+  if (/[",\n\r]/.test(value)) {
+    return `"${value.replaceAll('"', '""')}"`;
+  }
+  return value;
+}
+
+function formatUsdFromCents(cents: number): string {
+  return (cents / 100).toFixed(2);
+}
+
 type Props = {
   apiBase: string;
   onBackHome: () => void;
@@ -59,9 +72,63 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
     [participants]
   );
 
+  const handleExportCsv = () => {
+    const rows: string[] = [CSV_HEADERS.join(",")];
+    let grandTotalCents = 0;
+
+    for (const participant of sortedParticipants) {
+      const ledger = ledgersByParticipantId[participant.id];
+      let participantTotalCents = 0;
+
+      for (const bill of ledger?.bills ?? []) {
+        for (const line of bill.lines) {
+          participantTotalCents += line.amount_cents;
+          grandTotalCents += line.amount_cents;
+
+          rows.push(
+            [
+              participant.display_name,
+              bill.bill_description,
+              line.item_description,
+              formatUsdFromCents(line.amount_cents),
+            ]
+              .map(escapeCsvField)
+              .join(",")
+          );
+        }
+      }
+
+      rows.push(
+        [participant.display_name, "", "__PARTICIPANT_TOTAL__", formatUsdFromCents(participantTotalCents)]
+          .map(escapeCsvField)
+          .join(",")
+      );
+    }
+
+    rows.push(["", "", "__GRAND_TOTAL__", formatUsdFromCents(grandTotalCents)].map(escapeCsvField).join(","));
+
+    const csvContent = `${rows.join("\n")}\n`;
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
+    const timestamp = new Date().toISOString().slice(0, 19).replaceAll(":", "-");
+    const fileName = `running-balances-${timestamp}.csv`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="app">
-      <h1 className="h1">Running balances</h1>
+      <div className="row">
+        <h1 className="h1">Running balances</h1>
+        <button className="btn btnPrimary" type="button" onClick={handleExportCsv} disabled={isLoading || Boolean(error)}>
+          Export CSV
+        </button>
+      </div>
 
       <div className="card tableCard stack">
         {isLoading && <div className="helper">Loading participants…</div>}
