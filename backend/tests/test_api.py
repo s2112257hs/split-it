@@ -258,3 +258,55 @@ def test_split_rejects_assignment_for_foreign_item(client, monkeypatch):
     r = client.post("/api/receipts/11111111-1111-1111-1111-111111111111/split", json=payload)
     assert r.status_code == 400
     assert "unknown item" in r.get_json()["error"]["message"].lower()
+
+
+def test_get_participant_ledger_groups_lines_and_computes_total(client, monkeypatch):
+    class Participant:
+        id = "22222222-2222-2222-2222-222222222222"
+
+    class LedgerLine:
+        def __init__(self, receipt_image_id, bill_description, receipt_item_id, item_description, amount_cents):
+            self.receipt_image_id = receipt_image_id
+            self.bill_description = bill_description
+            self.receipt_item_id = receipt_item_id
+            self.item_description = item_description
+            self.amount_cents = amount_cents
+
+    class FakeRepo:
+        enabled = True
+
+        def get_participants_by_ids(self, *, participant_ids):
+            assert participant_ids == ["22222222-2222-2222-2222-222222222222"]
+            return [Participant()]
+
+        def get_participant_ledger_lines(self, *, participant_id):
+            assert participant_id == "22222222-2222-2222-2222-222222222222"
+            return [
+                LedgerLine("r2", "Dinner", "i2", "Steak", 1500),
+                LedgerLine("r2", "Dinner", "i3", "Soda", 300),
+                LedgerLine("r1", "Lunch", "i1", "Soup", 700),
+            ]
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/participants/22222222-2222-2222-2222-222222222222/ledger")
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "participant_id": "22222222-2222-2222-2222-222222222222",
+        "computed_total_cents": 2500,
+        "bills": [
+            {
+                "receipt_image_id": "r2",
+                "bill_description": "Dinner",
+                "lines": [
+                    {"receipt_item_id": "i2", "item_description": "Steak", "amount_cents": 1500},
+                    {"receipt_item_id": "i3", "item_description": "Soda", "amount_cents": 300},
+                ],
+            },
+            {
+                "receipt_image_id": "r1",
+                "bill_description": "Lunch",
+                "lines": [{"receipt_item_id": "i1", "item_description": "Soup", "amount_cents": 700}],
+            },
+        ],
+    }
