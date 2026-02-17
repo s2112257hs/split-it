@@ -315,6 +315,13 @@ def split_receipt(receipt_image_id: str):
                 "receipt_image_id": receipt_image_id,
                 "grand_total_cents": grand_total_cents,
                 "totals_by_participant_id": totals_by_participant_id,
+                "receipt_items": [
+                    {
+                        "id": item.id,
+                        "description": item.description,
+                    }
+                    for item in receipt_items
+                ],
                 "allocations": [
                     {
                         "participant_id": allocation.participant_id,
