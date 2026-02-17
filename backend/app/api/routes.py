@@ -205,6 +205,56 @@ def delete_participant(participant_id: str):
     return jsonify({"deleted": True}), 200
 
 
+@api_bp.get("/participants/<participant_id>/ledger")
+def get_participant_ledger(participant_id: str):
+    if not is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        participant = repo.get_participants_by_ids(participant_ids=[participant_id])
+        if not participant:
+            return _json_error("Participant not found.", status=404, code="not_found")
+
+        ledger_lines = repo.get_participant_ledger_lines(participant_id=participant_id)
+    except Exception:
+        return _json_error("Failed to fetch participant ledger.", status=500, code="db_error")
+
+    bill_groups: Dict[str, dict] = {}
+    computed_total_cents = 0
+
+    for line in ledger_lines:
+        if line.receipt_image_id not in bill_groups:
+            bill_groups[line.receipt_image_id] = {
+                "receipt_image_id": line.receipt_image_id,
+                "bill_description": line.bill_description,
+                "lines": [],
+            }
+
+        bill_groups[line.receipt_image_id]["lines"].append(
+            {
+                "receipt_item_id": line.receipt_item_id,
+                "item_description": line.item_description,
+                "amount_cents": line.amount_cents,
+            }
+        )
+        computed_total_cents += line.amount_cents
+
+    return (
+        jsonify(
+            {
+                "participant_id": participant_id,
+                "computed_total_cents": computed_total_cents,
+                "bills": list(bill_groups.values()),
+            }
+        ),
+        200,
+    )
+
+
 @api_bp.post("/receipts/<receipt_image_id>/split")
 def split_receipt(receipt_image_id: str):
     if not is_uuid(receipt_image_id):

@@ -30,6 +30,15 @@ class ItemAllocation:
     amount_cents: int
 
 
+@dataclass(frozen=True)
+class ParticipantLedgerLine:
+    receipt_image_id: str
+    bill_description: str
+    receipt_item_id: str
+    item_description: str
+    amount_cents: int
+
+
 class SplitItRepository:
     def __init__(self, database_url: str):
         self.database_url = database_url.strip()
@@ -204,3 +213,32 @@ class SplitItRepository:
                 )
 
             conn.commit()
+
+    def get_participant_ledger_lines(self, *, participant_id: str) -> list[ParticipantLedgerLine]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    ri.id::text AS receipt_image_id,
+                    ri.description AS bill_description,
+                    ritem.id::text AS receipt_item_id,
+                    ritem.description AS item_description,
+                    pia.amount_cents
+                FROM participant_item_allocations pia
+                JOIN receipt_items ritem ON ritem.id = pia.receipt_item_id
+                JOIN receipt_images ri ON ri.id = ritem.receipt_image_id
+                WHERE pia.participant_id = %s
+                ORDER BY ri.created_at DESC, ri.id DESC, ritem.id ASC
+                """,
+                (participant_id,),
+            )
+            return [
+                ParticipantLedgerLine(
+                    receipt_image_id=row[0],
+                    bill_description=row[1],
+                    receipt_item_id=row[2],
+                    item_description=row[3],
+                    amount_cents=int(row[4]),
+                )
+                for row in cur.fetchall()
+            ]

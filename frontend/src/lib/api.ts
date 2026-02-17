@@ -4,6 +4,7 @@ import type {
   CreateReceiptResponse,
   Item,
   Participant,
+  ParticipantLedger,
 } from "../types/split";
 import { requestJson } from "./http";
 
@@ -86,4 +87,19 @@ export async function createParticipant(args: { display_name: string; apiBase: s
     },
     body: JSON.stringify({ display_name: args.display_name }),
   });
+}
+
+export async function getParticipantLedger(args: {
+  participantId: string;
+  apiBase: string;
+}): Promise<ParticipantLedger> {
+  const data = await requestJson<ParticipantLedger>(
+    `${args.apiBase}/api/participants/${args.participantId}/ledger`
+  );
+
+  if (!Array.isArray(data.bills) || typeof data.computed_total_cents !== "number") {
+    throw new Error("Unexpected response from /api/participants/{participant_id}/ledger.");
+  }
+
+  return data;
 }
