@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-from typing import Dict, List
-from uuid import UUID
+from typing import Dict
 
 from flask import Blueprint, current_app, jsonify, request
 
-from app.db.repository import ItemAllocation, ParsedItem, SplitItRepository
+from app.db.repository import ItemAllocation, SplitItRepository
 from app.domain.split_logic import SplitLogicError, split_cents_fair_remainder
 from app.services import ocr_service
 from app.services.receipt_parser import ReceiptParseError, extract_items_from_ocr_text
+from app.api.validators import (
+    ApiValidationError,
+    is_uuid,
+    parse_receipt_items,
+    parse_unique_participant_ids,
+)
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -19,14 +24,6 @@ def _json_error(message: str, *, status: int = 400, code: str = "bad_request"):
 
 def _repo() -> SplitItRepository:
     return SplitItRepository(current_app.config.get("DATABASE_URL", ""))
-
-
-def _is_uuid(value: str) -> bool:
-    try:
-        UUID(value)
-    except (ValueError, TypeError):
-        return False
-    return True
 
 
 @api_bp.get("/health")
@@ -87,31 +84,17 @@ def create_receipt_from_image():
 
 @api_bp.put("/receipts/<receipt_image_id>/items")
 def replace_receipt_items(receipt_image_id: str):
-    if not _is_uuid(receipt_image_id):
+    if not is_uuid(receipt_image_id):
         return _json_error("Invalid receipt_image_id.", status=400)
 
     data = request.get_json(silent=True)
     if data is None:
         return _json_error("Request body must be JSON.", status=400)
 
-    raw_items = data.get("items")
-    if not isinstance(raw_items, list):
-        return _json_error("'items' must be a list.", status=400)
-
-    parsed_items: list[ParsedItem] = []
-    for idx, raw_item in enumerate(raw_items):
-        if not isinstance(raw_item, dict):
-            return _json_error(f"Item at index {idx} must be an object.", status=400)
-
-        description = raw_item.get("description")
-        price_cents = raw_item.get("price_cents")
-
-        if not isinstance(description, str) or not description.strip():
-            return _json_error(f"Item at index {idx} must include a non-empty 'description'.", status=400)
-        if not isinstance(price_cents, int) or price_cents < 0:
-            return _json_error(f"Item at index {idx} must include 'price_cents' as int >= 0.", status=400)
-
-        parsed_items.append(ParsedItem(description=description.strip(), price_cents=price_cents))
+    try:
+        parsed_items = parse_receipt_items(data.get("items"))
+    except ApiValidationError as exc:
+        return _json_error(str(exc), status=400)
 
     repo = _repo()
     if not repo.enabled:
@@ -197,7 +180,7 @@ def create_participant():
 
 @api_bp.delete("/participants/<participant_id>")
 def delete_participant(participant_id: str):
-    if not _is_uuid(participant_id):
+    if not is_uuid(participant_id):
         return _json_error("Invalid participant_id.", status=400)
 
     repo = _repo()
@@ -224,30 +207,21 @@ def delete_participant(participant_id: str):
 
 @api_bp.post("/receipts/<receipt_image_id>/split")
 def split_receipt(receipt_image_id: str):
-    if not _is_uuid(receipt_image_id):
+    if not is_uuid(receipt_image_id):
         return _json_error("Invalid receipt_image_id.", status=400)
 
     data = request.get_json(silent=True)
     if data is None:
         return _json_error("Request body must be JSON.", status=400)
 
-    participants = data.get("participants")
     assignments = data.get("assignments")
-
-    if not isinstance(participants, list) or not participants:
-        return _json_error("'participants' must be a non-empty list of participant ids.", status=400)
     if not isinstance(assignments, dict):
         return _json_error("'assignments' must be an object mapping receipt_item_id -> participant_ids.", status=400)
 
-    participant_ids: List[str] = []
-    seen_participant_ids: set[str] = set()
-    for pid in participants:
-        if not isinstance(pid, str) or not _is_uuid(pid):
-            return _json_error("Each participant id must be a valid UUID string.", status=400)
-        if pid in seen_participant_ids:
-            return _json_error("Participant ids must be unique.", status=400)
-        seen_participant_ids.add(pid)
-        participant_ids.append(pid)
+    try:
+        participant_ids = parse_unique_participant_ids(data.get("participants"))
+    except ApiValidationError as exc:
+        return _json_error(str(exc), status=400)
 
     repo = _repo()
     if not repo.enabled:
@@ -289,7 +263,7 @@ def split_receipt(receipt_image_id: str):
         selected = assignments[item.id]
         seen_selected: set[str] = set()
         for selected_pid in selected:
-            if not isinstance(selected_pid, str) or not _is_uuid(selected_pid):
+            if not isinstance(selected_pid, str) or not is_uuid(selected_pid):
                 return _json_error(f"Assignment for item {item.id} contains invalid participant id.", status=400)
             if selected_pid in seen_selected:
                 return _json_error(f"Assignment for item {item.id} contains duplicate participant ids.", status=400)
