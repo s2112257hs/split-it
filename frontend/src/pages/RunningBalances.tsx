@@ -115,13 +115,6 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
                         <div className="helper">No items yet</div>
                       ) : (
                         <table className="table" style={{ minWidth: 0 }}>
-                          <thead>
-                            <tr>
-                              <th>Item contribution</th>
-                              <th style={{ textAlign: "right" }}>Bill contribution</th>
-                              <th style={{ textAlign: "right" }}>Participant contribution</th>
-                            </tr>
-                          </thead>
                           <tbody>
                             {participant.bills.map((bill) => (
                               <Fragment key={bill.receipt_id}>
@@ -141,14 +134,18 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
                                   </tr>
                                 ))}
                                 <tr key={`${bill.receipt_id}-total`}>
-                                  <td />
+                                  <td>
+                                    <strong><span>Bill Total</span></strong>
+                                  </td>
                                   <td style={{ textAlign: "right" }}><strong>{centsToUsdString(bill.bill_total_cents)}</strong></td>
                                   <td style={{ textAlign: "right" }} />
                                 </tr>
                               </Fragment>
                             ))}
                             <tr>
-                              <td />
+                              <td>
+                                <strong><span> Grand Total </span></strong>
+                              </td>
                               <td />
                               <td style={{ textAlign: "right" }}><strong>{centsToUsdString(participant.participant_total_cents)}</strong></td>
                             </tr>
