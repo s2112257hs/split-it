@@ -223,6 +223,10 @@ def test_split_replaces_allocations_for_receipt(client, monkeypatch):
         "22222222-2222-2222-2222-222222222222": 1000,
         "33333333-3333-3333-3333-333333333333": 175,
     }
+    assert body["receipt_items"] == [
+        {"id": "aaaaaaa1-1111-1111-1111-111111111111", "description": "Coffee"},
+        {"id": "aaaaaaa2-1111-1111-1111-111111111111", "description": "Sandwich"},
+    ]
     assert captured["receipt_image_id"] == "11111111-1111-1111-1111-111111111111"
     assert len(captured["allocations"]) == 3
 

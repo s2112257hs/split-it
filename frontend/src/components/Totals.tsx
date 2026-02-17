@@ -20,6 +20,9 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
   const [assignedTotalCents, setAssignedTotalCents] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [allocations, setAllocations] = useState<Array<{ participant_id: string; receipt_item_id: string; amount_cents: number }>>([]);
+  const [receiptItemDescriptions, setReceiptItemDescriptions] = useState<Record<string, string>>({});
+  const [expandedParticipantIds, setExpandedParticipantIds] = useState<Record<string, boolean>>({});
 
   const receiptTotalCents = useMemo(() => items.reduce((sum, item) => sum + item.price_cents, 0), [items]);
 
@@ -41,6 +44,20 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
         if (!isActive) return;
         setTotalsByParticipantId(result.totals_by_participant_id);
         setAssignedTotalCents(result.grand_total_cents);
+
+        const safeAllocations = Array.isArray(result.allocations) ? result.allocations : [];
+        const safeReceiptItems = Array.isArray(result.receipt_items)
+          ? result.receipt_items
+          : items.map((item) => ({ id: item.id, description: item.description }));
+
+        setAllocations(safeAllocations);
+        setReceiptItemDescriptions(
+          safeReceiptItems.reduce<Record<string, string>>((acc, item) => {
+            acc[item.id] = item.description;
+            return acc;
+          }, {})
+        );
+        setExpandedParticipantIds({});
       } catch (e: unknown) {
         if (!isActive) return;
         setError(e instanceof Error ? e.message : "Failed to calculate totals.");
@@ -54,7 +71,26 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
     return () => {
       isActive = false;
     };
-  }, [participants, assignments, apiBase, receiptImageId]);
+  }, [participants, assignments, apiBase, receiptImageId, items]);
+
+  const allocationsByParticipantId = useMemo(() => {
+    return allocations.reduce<Record<string, Array<{ receipt_item_id: string; amount_cents: number }>>>((acc, allocation) => {
+      if (allocation.amount_cents <= 0) {
+        return acc;
+      }
+
+      if (!acc[allocation.participant_id]) {
+        acc[allocation.participant_id] = [];
+      }
+
+      acc[allocation.participant_id].push({
+        receipt_item_id: allocation.receipt_item_id,
+        amount_cents: allocation.amount_cents,
+      });
+
+      return acc;
+    }, {});
+  }, [allocations]);
 
   const sumPerPerson = useMemo(
     () => participants.reduce((sum, participant) => sum + (totalsByParticipantId[participant.id] ?? 0), 0),
@@ -66,7 +102,7 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
   return (
     <div className="card tableCard stack">
       <div>
-        <h2 className="stepTitle">Totals</h2>
+        <h2 className="stepTitle">Step 5 — Summary + details</h2>
       </div>
 
       <div className="pillRow">
@@ -91,29 +127,61 @@ export default function Totals({ apiBase, receiptImageId, currency, items, parti
         </div>
       )}
 
-      <div className="tableWrap">
-        <table className="table" style={{ minWidth: 0 }}>
-          <thead>
-            <tr>
-              <th>Person</th>
-              <th style={{ textAlign: "right" }}>Total ({currency})</th>
-            </tr>
-          </thead>
-          <tbody>
-            {participants.map((participant) => (
-              <tr key={participant.id}>
-                <td>{participant.display_name}</td>
-                <td style={{ textAlign: "right" }}>{centsToUsdString(totalsByParticipantId[participant.id] ?? 0)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td>Sum</td>
-              <td style={{ textAlign: "right" }}>{centsToUsdString(sumPerPerson)}</td>
-            </tr>
-          </tfoot>
-        </table>
+      <div className="stack">
+        {participants.map((participant) => {
+          const participantAllocations = allocationsByParticipantId[participant.id] ?? [];
+          const isExpanded = Boolean(expandedParticipantIds[participant.id]);
+
+          return (
+            <div className="card stack" key={participant.id}>
+              <div className="row">
+                <div>
+                  <strong>{participant.display_name}</strong>
+                  <div className="helper">Total for this receipt: {centsToUsdString(totalsByParticipantId[participant.id] ?? 0)} {currency}</div>
+                </div>
+
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setExpandedParticipantIds((prev) => ({
+                      ...prev,
+                      [participant.id]: !prev[participant.id],
+                    }));
+                  }}
+                >
+                  {isExpanded ? "Hide details" : "Show details"}
+                </button>
+              </div>
+
+              {isExpanded && (
+                <div className="tableWrap">
+                  <table className="table" style={{ minWidth: 0 }}>
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th style={{ textAlign: "right" }}>Allocated ({currency})</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {participantAllocations.length === 0 && (
+                        <tr>
+                          <td colSpan={2} className="helper">No allocated items for this participant.</td>
+                        </tr>
+                      )}
+
+                      {participantAllocations.map((allocation) => (
+                        <tr key={`${participant.id}-${allocation.receipt_item_id}`}>
+                          <td>{receiptItemDescriptions[allocation.receipt_item_id] ?? "Unknown item"}</td>
+                          <td style={{ textAlign: "right" }}>{centsToUsdString(allocation.amount_cents)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="card stack">

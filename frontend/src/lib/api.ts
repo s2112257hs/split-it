@@ -62,7 +62,12 @@ export async function calculateSplit(args: {
     body: JSON.stringify({ participants: participants.map((p) => p.id), assignments }),
   });
 
-  if (typeof data.grand_total_cents !== "number" || !data.totals_by_participant_id) {
+  if (
+    typeof data.grand_total_cents !== "number"
+    || !data.totals_by_participant_id
+    || !Array.isArray(data.allocations)
+    || !Array.isArray(data.receipt_items)
+  ) {
     throw new Error("Unexpected response from /api/receipts/{receipt_image_id}/split.");
   }
 
