@@ -9,7 +9,7 @@ type Props = {
   assignments: AssignmentsMap;
   onChange: (next: AssignmentsMap) => void;
   onBack?: () => void;
-  onNext?: () => void;
+  onNext?: () => Promise<void> | void;
 };
 
 function unique(arr: string[]) {
@@ -20,6 +20,7 @@ export default function Assignments({ currency, items, participants, assignments
   const [showErrors, setShowErrors] = useState(false);
   const [topError, setTopError] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const participantIds = useMemo(() => new Set(participants.map((p) => p.id)), [participants]);
@@ -53,10 +54,10 @@ export default function Assignments({ currency, items, participants, assignments
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button className="btn" onClick={() => onChange(Object.fromEntries(items.map((it) => [it.id, participants.map((p) => p.id)])))}>
+        <button className="btn" disabled={isSubmitting} onClick={() => onChange(Object.fromEntries(items.map((it) => [it.id, participants.map((p) => p.id)])))}>
           Select everyone for all items
         </button>
-        <button className="btn" onClick={() => onChange(Object.fromEntries(items.map((it) => [it.id, []])))}>
+        <button className="btn" disabled={isSubmitting} onClick={() => onChange(Object.fromEntries(items.map((it) => [it.id, []])))}>
           Clear all selections
         </button>
       </div>
@@ -70,7 +71,7 @@ export default function Assignments({ currency, items, participants, assignments
           const countText = `${selected.length} selected`;
           return (
             <div className="assignItem" key={it.id} ref={(el) => { itemRefs.current[it.id] = el; }}>
-              <button className="assignHeader btn" onClick={() => setExpanded((prev) => ({ ...prev, [it.id]: !isExpanded }))}>
+              <button className="assignHeader btn" disabled={isSubmitting} onClick={() => setExpanded((prev) => ({ ...prev, [it.id]: !isExpanded }))}>
                 <div style={{ textAlign: "left" }}>{it.description || "(No description)"}</div>
                 <div>{centsToUsdString(it.price_cents)} {currency}</div>
                 <span className={selected.length === 0 ? "badgeWarning" : "badgeNeutral"}>{countText}</span>
@@ -79,8 +80,8 @@ export default function Assignments({ currency, items, participants, assignments
               {isExpanded && (
                 <>
                   <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <button className="btn" onClick={() => setItemSelection(it.id, participants.map((p) => p.id))}>All</button>
-                    <button className="btn" onClick={() => setItemSelection(it.id, [])}>None</button>
+                    <button className="btn" disabled={isSubmitting} onClick={() => setItemSelection(it.id, participants.map((p) => p.id))}>All</button>
+                    <button className="btn" disabled={isSubmitting} onClick={() => setItemSelection(it.id, [])}>None</button>
                   </div>
 
                   <div className="chipRow">
@@ -90,12 +91,13 @@ export default function Assignments({ currency, items, participants, assignments
                         <button
                           key={p.id}
                           className={`chip ${active ? "chipActive" : ""}`}
+                          disabled={isSubmitting}
                           onClick={() => {
                             const next = active ? selected.filter((id) => id !== p.id) : [...selected, p.id];
                             setItemSelection(it.id, next);
                           }}
                         >
-                          {p.name}
+                          {p.display_name}
                         </button>
                       );
                     })}
@@ -110,11 +112,11 @@ export default function Assignments({ currency, items, participants, assignments
       </div>
 
       <div className="actionsFooter actionsFooterSticky">
-        {onBack ? <button className="btn" onClick={onBack}>Back</button> : <span />}
+        {onBack ? <button className="btn" onClick={onBack} disabled={isSubmitting}>Back</button> : <span />}
         {onNext && (
           <button
             className="btn btnPrimary"
-            onClick={() => {
+            onClick={async () => {
               const missing = items.filter((it) => (normalizedAssignments[it.id] ?? []).length === 0);
               if (missing.length > 0) {
                 setShowErrors(true);
@@ -128,10 +130,15 @@ export default function Assignments({ currency, items, participants, assignments
               }
               setTopError("");
               onChange(normalizedAssignments);
-              onNext();
+              setIsSubmitting(true);
+              try {
+                await onNext();
+              } finally {
+                setIsSubmitting(false);
+              }
             }}
           >
-            Next
+            {isSubmitting ? "Saving…" : "Next"}
           </button>
         )}
       </div>
