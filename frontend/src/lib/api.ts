@@ -5,6 +5,7 @@ import type {
   Item,
   Participant,
   ParticipantLedger,
+  RunningBalancesResponse,
 } from "../types/split";
 import { requestJson } from "./http";
 
@@ -87,6 +88,17 @@ export async function createParticipant(args: { display_name: string; apiBase: s
     },
     body: JSON.stringify({ display_name: args.display_name }),
   });
+}
+
+
+export async function getRunningBalances(apiBase: string): Promise<RunningBalancesResponse> {
+  const data = await requestJson<RunningBalancesResponse>(`${apiBase}/api/running-balances`);
+
+  if (!Array.isArray(data.participants)) {
+    throw new Error("Unexpected response from /api/running-balances.");
+  }
+
+  return data;
 }
 
 export async function getParticipantLedger(args: {

@@ -147,6 +147,53 @@ def list_participants():
     )
 
 
+@api_bp.get("/running-balances")
+def get_running_balances():
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        participants = repo.list_running_balance_participants()
+    except Exception:
+        return _json_error("Failed to fetch running balances.", status=500, code="db_error")
+
+    response_participants = []
+    for participant in participants:
+        bills: Dict[str, dict] = {}
+        participant_total_cents = 0
+
+        for line in participant.lines:
+            if line.receipt_id not in bills:
+                bills[line.receipt_id] = {
+                    "receipt_id": line.receipt_id,
+                    "bill_description": line.bill_description,
+                    "bill_total_cents": 0,
+                    "lines": [],
+                }
+
+            bills[line.receipt_id]["lines"].append(
+                {
+                    "receipt_item_id": line.receipt_item_id,
+                    "item_name": line.item_name,
+                    "contribution_cents": line.contribution_cents,
+                }
+            )
+            bills[line.receipt_id]["bill_total_cents"] += line.contribution_cents
+            participant_total_cents += line.contribution_cents
+
+        response_participants.append(
+            {
+                "participant_id": participant.participant_id,
+                "participant_name": participant.participant_name,
+                "participant_total_cents": participant_total_cents,
+                "bills": list(bills.values()),
+            }
+        )
+
+    return jsonify({"participants": response_participants}), 200
+
+
 @api_bp.post("/participants")
 def create_participant():
     data = request.get_json(silent=True)
