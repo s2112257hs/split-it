@@ -39,6 +39,24 @@ class ParticipantLedgerLine:
     amount_cents: int
 
 
+@dataclass(frozen=True)
+class OutstandingAllocationLine:
+    receipt_image_id: str
+    bill_description: str
+    receipt_item_id: str
+    item_name: str
+    contribution_cents: int
+
+
+@dataclass(frozen=True)
+class ParticipantSettlementRecord:
+    id: str
+    participant_id: str
+    amount_cents: int
+    paid_at: str
+    note: str | None
+
+
 class SplitItRepository:
     def __init__(self, database_url: str):
         self.database_url = database_url.strip()
@@ -242,3 +260,59 @@ class SplitItRepository:
                 )
                 for row in cur.fetchall()
             ]
+
+    def get_outstanding_allocation_lines(self, *, participant_id: str) -> list[OutstandingAllocationLine]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH participant_last_settlement AS (
+                    SELECT MAX(ps.paid_at) AS last_paid_at
+                    FROM participant_settlements ps
+                    WHERE ps.participant_id = %s
+                )
+                SELECT
+                    ri.id::text AS receipt_image_id,
+                    ri.description AS bill_description,
+                    ritem.id::text AS receipt_item_id,
+                    ritem.description AS item_name,
+                    pia.amount_cents AS contribution_cents
+                FROM participant_item_allocations pia
+                JOIN receipt_items ritem ON ritem.id = pia.receipt_item_id
+                JOIN receipt_images ri ON ri.id = ritem.receipt_image_id
+                CROSS JOIN participant_last_settlement pls
+                WHERE pia.participant_id = %s
+                  AND pia.created_at > COALESCE(pls.last_paid_at, TIMESTAMPTZ '1970-01-01')
+                ORDER BY ri.created_at DESC, ri.id DESC, ritem.created_at ASC, ritem.id ASC
+                """,
+                (participant_id, participant_id),
+            )
+            return [
+                OutstandingAllocationLine(
+                    receipt_image_id=row[0],
+                    bill_description=row[1],
+                    receipt_item_id=row[2],
+                    item_name=row[3],
+                    contribution_cents=int(row[4]),
+                )
+                for row in cur.fetchall()
+            ]
+
+    def create_participant_settlement(self, *, participant_id: str, amount_cents: int, note: str | None) -> ParticipantSettlementRecord:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO participant_settlements (participant_id, amount_cents, note)
+                VALUES (%s, %s, %s)
+                RETURNING id::text, participant_id::text, amount_cents, paid_at::text, note
+                """,
+                (participant_id, amount_cents, note),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return ParticipantSettlementRecord(
+                id=row[0],
+                participant_id=row[1],
+                amount_cents=int(row[2]),
+                paid_at=row[3],
+                note=row[4],
+            )

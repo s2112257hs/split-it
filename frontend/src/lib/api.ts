@@ -5,6 +5,9 @@ import type {
   Item,
   Participant,
   ParticipantLedger,
+  RunningBalanceParticipant,
+  RunningBalancesResponse,
+  SettleParticipantResponse,
 } from "../types/split";
 import { requestJson } from "./http";
 
@@ -102,4 +105,33 @@ export async function getParticipantLedger(args: {
   }
 
   return data;
+}
+
+
+export async function getRunningBalances(apiBase: string): Promise<RunningBalanceParticipant[]> {
+  const data = await requestJson<RunningBalancesResponse>(`${apiBase}/api/running-balances`);
+
+  if (!Array.isArray(data.participants)) {
+    throw new Error("Unexpected response from /api/running-balances.");
+  }
+
+  return data.participants;
+}
+
+export async function settleParticipantInFull(args: {
+  participantId: string;
+  amount_cents: number;
+  note?: string;
+  apiBase: string;
+}): Promise<SettleParticipantResponse> {
+  return requestJson<SettleParticipantResponse>(
+    `${args.apiBase}/api/participants/${args.participantId}/settle`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ amount_cents: args.amount_cents, note: args.note }),
+    }
+  );
 }
