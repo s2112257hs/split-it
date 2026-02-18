@@ -35,6 +35,14 @@ CREATE TABLE IF NOT EXISTS participant_item_allocations (
     UNIQUE (participant_id, receipt_item_id)
 );
 
+CREATE TABLE IF NOT EXISTS participant_settlements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+    paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    note TEXT
+);
+
 CREATE OR REPLACE FUNCTION validate_allocation_amount()
 RETURNS TRIGGER AS $$
 DECLARE

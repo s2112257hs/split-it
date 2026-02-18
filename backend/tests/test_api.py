@@ -310,3 +310,151 @@ def test_get_participant_ledger_groups_lines_and_computes_total(client, monkeypa
             },
         ],
     }
+
+
+def test_get_running_balances_returns_only_outstanding_participants(client, monkeypatch):
+    class Participant:
+        def __init__(self, participant_id, display_name):
+            self.id = participant_id
+            self.display_name = display_name
+
+    class Line:
+        def __init__(self, receipt_image_id, bill_description, receipt_item_id, item_name, contribution_cents):
+            self.receipt_image_id = receipt_image_id
+            self.bill_description = bill_description
+            self.receipt_item_id = receipt_item_id
+            self.item_name = item_name
+            self.contribution_cents = contribution_cents
+
+    class FakeRepo:
+        enabled = True
+
+        def list_participants(self):
+            return [
+                Participant("p1", "Alice"),
+                Participant("p2", "Bob"),
+            ]
+
+        def get_outstanding_allocation_lines(self, *, participant_id):
+            if participant_id == "p1":
+                return [
+                    Line("r1", "Dinner", "i1", "Steak", 1200),
+                    Line("r1", "Dinner", "i2", "Tea", 300),
+                    Line("r2", "Lunch", "i3", "Soup", 500),
+                ]
+            return []
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/running-balances")
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "participants": [
+            {
+                "participant_id": "p1",
+                "participant_name": "Alice",
+                "outstanding_total_cents": 2000,
+                "bills": [
+                    {
+                        "receipt_id": "r1",
+                        "bill_description": "Dinner",
+                        "bill_total_cents": 1500,
+                        "lines": [
+                            {"receipt_item_id": "i1", "item_name": "Steak", "contribution_cents": 1200},
+                            {"receipt_item_id": "i2", "item_name": "Tea", "contribution_cents": 300},
+                        ],
+                    },
+                    {
+                        "receipt_id": "r2",
+                        "bill_description": "Lunch",
+                        "bill_total_cents": 500,
+                        "lines": [
+                            {"receipt_item_id": "i3", "item_name": "Soup", "contribution_cents": 500},
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+
+
+def test_settle_participant_rejects_partial_amount(client, monkeypatch):
+    class Participant:
+        id = "22222222-2222-2222-2222-222222222222"
+
+    class Line:
+        receipt_image_id = "r1"
+        bill_description = "Dinner"
+        receipt_item_id = "i1"
+        item_name = "Burger"
+        contribution_cents = 700
+
+    class FakeRepo:
+        enabled = True
+
+        def get_participants_by_ids(self, *, participant_ids):
+            assert participant_ids == ["22222222-2222-2222-2222-222222222222"]
+            return [Participant()]
+
+        def get_outstanding_allocation_lines(self, *, participant_id):
+            assert participant_id == "22222222-2222-2222-2222-222222222222"
+            return [Line()]
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settle",
+        json={"amount_cents": 699},
+    )
+    assert r.status_code == 409
+    assert r.get_json()["error"]["code"] == "full_settle_required"
+
+
+def test_settle_participant_records_full_amount(client, monkeypatch):
+    class Participant:
+        id = "22222222-2222-2222-2222-222222222222"
+
+    class Line:
+        receipt_image_id = "r1"
+        bill_description = "Dinner"
+        receipt_item_id = "i1"
+        item_name = "Burger"
+        contribution_cents = 700
+
+    class Settlement:
+        id = "s1"
+        participant_id = "22222222-2222-2222-2222-222222222222"
+        amount_cents = 700
+        paid_at = "2026-01-01T00:00:00+00:00"
+        note = "Paid in cash"
+
+    class FakeRepo:
+        enabled = True
+
+        def get_participants_by_ids(self, *, participant_ids):
+            return [Participant()]
+
+        def get_outstanding_allocation_lines(self, *, participant_id):
+            return [Line()]
+
+        def create_participant_settlement(self, *, participant_id, amount_cents, note):
+            assert participant_id == "22222222-2222-2222-2222-222222222222"
+            assert amount_cents == 700
+            assert note == "Paid in cash"
+            return Settlement()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settle",
+        json={"amount_cents": 700, "note": "Paid in cash"},
+    )
+
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "settlement_id": "s1",
+        "participant_id": "22222222-2222-2222-2222-222222222222",
+        "amount_cents": 700,
+        "paid_at": "2026-01-01T00:00:00+00:00",
+        "note": "Paid in cash",
+    }
