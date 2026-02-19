@@ -63,3 +63,28 @@ export type ParticipantLedger = {
   computed_total_cents: number;
   bills: ParticipantLedgerBill[];
 };
+
+
+export type RunningBalanceLine = {
+  receipt_item_id: string;
+  item_name: string;
+  contribution_cents: number;
+};
+
+export type RunningBalanceBill = {
+  receipt_id: string;
+  bill_description: string;
+  bill_total_cents: number;
+  lines: RunningBalanceLine[];
+};
+
+export type RunningBalanceParticipant = {
+  participant_id: string;
+  participant_name: string;
+  participant_total_cents: number;
+  bills: RunningBalanceBill[];
+};
+
+export type RunningBalancesResponse = {
+  participants: RunningBalanceParticipant[];
+};

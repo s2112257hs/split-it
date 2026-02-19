@@ -39,6 +39,22 @@ class ParticipantLedgerLine:
     amount_cents: int
 
 
+@dataclass(frozen=True)
+class RunningBalanceLine:
+    receipt_id: str
+    bill_description: str
+    receipt_item_id: str
+    item_name: str
+    contribution_cents: int
+
+
+@dataclass(frozen=True)
+class RunningBalanceParticipant:
+    participant_id: str
+    participant_name: str
+    lines: list[RunningBalanceLine]
+
+
 class SplitItRepository:
     def __init__(self, database_url: str):
         self.database_url = database_url.strip()
@@ -242,3 +258,73 @@ class SplitItRepository:
                 )
                 for row in cur.fetchall()
             ]
+
+    def list_running_balance_participants(self) -> list[RunningBalanceParticipant]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    p.id::text AS participant_id,
+                    p.display_name AS participant_name,
+                    ri.id::text AS receipt_id,
+                    ri.description AS bill_description,
+                    ritem.id::text AS receipt_item_id,
+                    ritem.description AS item_name,
+                    SUM(pia.amount_cents)::int AS contribution_cents,
+                    ri.created_at AS receipt_created_at
+                FROM participants p
+                LEFT JOIN participant_item_allocations pia ON pia.participant_id = p.id
+                LEFT JOIN receipt_items ritem ON ritem.id = pia.receipt_item_id
+                LEFT JOIN receipt_images ri ON ri.id = ritem.receipt_image_id
+                GROUP BY p.id, p.display_name, ri.id, ri.description, ritem.id, ritem.description, ri.created_at
+                ORDER BY p.display_name ASC, ri.created_at DESC NULLS LAST, ri.id DESC NULLS LAST, ritem.id ASC NULLS LAST
+                """
+            )
+            rows = cur.fetchall()
+
+        participants: list[RunningBalanceParticipant] = []
+        current_participant_id: str | None = None
+        current_lines: list[RunningBalanceLine] = []
+        current_participant_name = ""
+
+        for row in rows:
+            participant_id = row[0]
+            participant_name = row[1]
+            receipt_id = row[2]
+
+            if participant_id != current_participant_id:
+                if current_participant_id is not None:
+                    participants.append(
+                        RunningBalanceParticipant(
+                            participant_id=current_participant_id,
+                            participant_name=current_participant_name,
+                            lines=current_lines,
+                        )
+                    )
+                current_participant_id = participant_id
+                current_participant_name = participant_name
+                current_lines = []
+
+            if receipt_id is None:
+                continue
+
+            current_lines.append(
+                RunningBalanceLine(
+                    receipt_id=receipt_id,
+                    bill_description=row[3],
+                    receipt_item_id=row[4],
+                    item_name=row[5],
+                    contribution_cents=int(row[6]),
+                )
+            )
+
+        if current_participant_id is not None:
+            participants.append(
+                RunningBalanceParticipant(
+                    participant_id=current_participant_id,
+                    participant_name=current_participant_name,
+                    lines=current_lines,
+                )
+            )
+
+        return participants
