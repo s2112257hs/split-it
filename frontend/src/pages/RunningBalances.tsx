@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { getRunningBalances, settleParticipantInFull } from "../lib/api";
 import { centsToUsdString } from "../lib/money";
 import type { RunningBalanceParticipant } from "../types/split";
@@ -43,11 +43,6 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
     };
   }, [apiBase]);
 
-  const sortedParticipants = useMemo(
-    () => [...participants].sort((a, b) => a.participant_name.localeCompare(b.participant_name)),
-    [participants]
-  );
-
   return (
     <div className="app">
       <h1 className="h1">Running balances</h1>
@@ -64,9 +59,9 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
 
         {!isLoading && !error && (
           <div className="stack">
-            {sortedParticipants.length === 0 && <div className="helper">No outstanding balances.</div>}
+            {participants.length === 0 && <div className="helper">No outstanding balances.</div>}
 
-            {sortedParticipants.map((participant) => {
+            {participants.map((participant) => {
               const expanded = Boolean(expandedParticipantIds[participant.participant_id]);
 
               return (
