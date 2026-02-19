@@ -26,6 +26,42 @@ def _repo() -> SplitItRepository:
     return SplitItRepository(current_app.config.get("DATABASE_URL", ""))
 
 
+def _build_outstanding_breakdown(repo: SplitItRepository, *, participant_id: str) -> dict:
+    lines = repo.get_outstanding_allocation_lines(participant_id=participant_id)
+
+    bills_by_receipt_id: Dict[str, dict] = {}
+    outstanding_total_cents = 0
+    for line in lines:
+        bill = bills_by_receipt_id.get(line.receipt_image_id)
+        if bill is None:
+            bill = {
+                "receipt_id": line.receipt_image_id,
+                "bill_description": line.bill_description,
+                "bill_total_cents": 0,
+                "lines": [],
+            }
+            bills_by_receipt_id[line.receipt_image_id] = bill
+
+        bill["lines"].append(
+            {
+                "receipt_item_id": line.receipt_item_id,
+                "item_name": line.item_name,
+                "contribution_cents": line.contribution_cents,
+            }
+        )
+        bill["bill_total_cents"] += line.contribution_cents
+        outstanding_total_cents += line.contribution_cents
+
+    bills = list(bills_by_receipt_id.values())
+    if sum(bill["bill_total_cents"] for bill in bills) != outstanding_total_cents:
+        raise RuntimeError("Outstanding breakdown total mismatch")
+
+    return {
+        "outstanding_total_cents": outstanding_total_cents,
+        "bills": bills,
+    }
+
+
 @api_bp.get("/health")
 def health():
     return jsonify({"status": "ok"}), 200
@@ -178,6 +214,34 @@ def create_participant():
     )
 
 
+@api_bp.get("/running-balances")
+def get_running_balances():
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        participants = repo.list_participants()
+        response_participants = []
+        for participant in participants:
+            outstanding = _build_outstanding_breakdown(repo, participant_id=participant.id)
+            if outstanding["outstanding_total_cents"] <= 0:
+                continue
+
+            response_participants.append(
+                {
+                    "participant_id": participant.id,
+                    "participant_name": participant.display_name,
+                    "outstanding_total_cents": outstanding["outstanding_total_cents"],
+                    "bills": outstanding["bills"],
+                }
+            )
+    except Exception:
+        return _json_error("Failed to fetch running balances.", status=500, code="db_error")
+
+    return jsonify({"participants": response_participants}), 200
+
+
 @api_bp.delete("/participants/<participant_id>")
 def delete_participant(participant_id: str):
     if not is_uuid(participant_id):
@@ -249,6 +313,63 @@ def get_participant_ledger(participant_id: str):
                 "participant_id": participant_id,
                 "computed_total_cents": computed_total_cents,
                 "bills": list(bill_groups.values()),
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.post("/participants/<participant_id>/settle")
+def settle_participant(participant_id: str):
+    if not is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return _json_error("Request body must be JSON.", status=400)
+
+    amount_cents = data.get("amount_cents")
+    if not isinstance(amount_cents, int) or amount_cents < 0:
+        return _json_error("'amount_cents' must be an integer >= 0.", status=400)
+
+    note = data.get("note")
+    if note is not None and not isinstance(note, str):
+        return _json_error("'note' must be a string when provided.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        participant = repo.get_participants_by_ids(participant_ids=[participant_id])
+        if not participant:
+            return _json_error("Participant not found.", status=404, code="not_found")
+
+        outstanding = _build_outstanding_breakdown(repo, participant_id=participant_id)
+        current_outstanding_total_cents = outstanding["outstanding_total_cents"]
+        if amount_cents != current_outstanding_total_cents:
+            return _json_error(
+                f"Full settle required: amount_cents must equal current outstanding total ({current_outstanding_total_cents}).",
+                status=409,
+                code="full_settle_required",
+            )
+
+        settlement = repo.create_participant_settlement(
+            participant_id=participant_id,
+            amount_cents=amount_cents,
+            note=note.strip() if isinstance(note, str) else None,
+        )
+    except Exception:
+        return _json_error("Failed to settle participant.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "settlement_id": settlement.id,
+                "participant_id": settlement.participant_id,
+                "amount_cents": settlement.amount_cents,
+                "paid_at": settlement.paid_at,
+                "note": settlement.note,
             }
         ),
         200,
