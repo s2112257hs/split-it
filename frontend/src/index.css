@@ -95,6 +95,13 @@ body {
   max-width: 900px;
 }
 
+.filtersRow {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 170px 170px;
+  gap: 10px;
+  align-items: end;
+}
+
 .stack {
   display: grid;
   gap: 12px;
@@ -399,6 +406,79 @@ body {
   font-weight: 600;
 }
 
+.billGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.billCard {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  box-shadow: none;
+  transition: transform 0.15s ease;
+}
+
+.billCard:hover {
+  transform: translateY(-1px);
+}
+
+.billCardImageWrap {
+  height: 170px;
+  background: #f5f6f8;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.billCardImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.billCardImagePlaceholder {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.billCardBody {
+  padding: 0 2px;
+  display: grid;
+  gap: 6px;
+}
+
+.billCardDescription {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.billCardDate {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.billCard:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 12px;
+}
+
 .modalBackdrop {
   position: fixed;
   inset: 0;
@@ -420,6 +500,10 @@ body {
 @media (max-width: 720px) {
   .app {
     padding: 18px 14px 92px;
+  }
+
+  .filtersRow {
+    grid-template-columns: 1fr;
   }
 
   .actionsFooterSticky {

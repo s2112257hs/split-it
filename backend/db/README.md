@@ -32,4 +32,16 @@ Rollback:
 psql "$DATABASE_URL" -f backend/db/migrations/003_participant_repayments.rollback.sql
 ```
 
+Receipt draft/finalized lifecycle migration:
+
+```bash
+psql "$DATABASE_URL" -f backend/db/migrations/004_receipt_draft_finalize.sql
+```
+
+Rollback:
+
+```bash
+psql "$DATABASE_URL" -f backend/db/migrations/004_receipt_draft_finalize.rollback.sql
+```
+
 Folio math reference: `backend/db/FOLIO_FORMULA_SHEET.md`.

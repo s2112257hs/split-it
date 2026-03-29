@@ -142,3 +142,38 @@ export type RunningBalanceParticipant = {
 export type RunningBalancesResponse = {
   participants: RunningBalanceParticipant[];
 };
+
+export type BillPreview = {
+  receipt_image_id: string;
+  bill_description: string;
+  entered_at: string;
+  has_image: boolean;
+  preview_image_url: string;
+};
+
+export type BillPreviewsResponse = {
+  bills: BillPreview[];
+};
+
+export type BillSplitDetailLine = {
+  receipt_item_id: string;
+  item_description: string;
+  amount_cents: number;
+};
+
+export type BillSplitDetailParticipant = {
+  participant_id: string;
+  participant_name: string;
+  participant_total_cents: number;
+  lines: BillSplitDetailLine[];
+};
+
+export type BillSplitDetail = {
+  receipt_image_id: string;
+  bill_description: string;
+  entered_at: string;
+  bill_total_cents: number;
+  has_image: boolean;
+  show_bill_image_url: string;
+  participants: BillSplitDetailParticipant[];
+};

@@ -28,6 +28,45 @@ class ReceiptItemRecord:
 
 
 @dataclass(frozen=True)
+class BillPreviewRecord:
+    receipt_image_id: str
+    bill_description: str
+    entered_at: datetime
+    has_image: bool
+
+
+@dataclass(frozen=True)
+class ReceiptImageRecord:
+    image_blob: bytes | None
+    image_path: str | None
+
+
+@dataclass(frozen=True)
+class BillSplitParticipantLine:
+    receipt_item_id: str
+    item_description: str
+    amount_cents: int
+
+
+@dataclass(frozen=True)
+class BillSplitParticipantRecord:
+    participant_id: str
+    participant_name: str
+    participant_total_cents: int
+    lines: list[BillSplitParticipantLine]
+
+
+@dataclass(frozen=True)
+class BillSplitDetailRecord:
+    receipt_image_id: str
+    bill_description: str
+    entered_at: datetime
+    bill_total_cents: int
+    has_image: bool
+    participants: list[BillSplitParticipantRecord]
+
+
+@dataclass(frozen=True)
 class ParticipantRecord:
     id: str
     display_name: str
@@ -263,8 +302,8 @@ class SplitItRepository:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO receipt_images (owner_id, description, image_blob)
-                VALUES (%s, %s, %s)
+                INSERT INTO receipt_images (owner_id, description, image_blob, status, finalized_at)
+                VALUES (%s, %s, %s, 'draft', NULL)
                 RETURNING id
                 """,
                 (owner_id, description, image_bytes),
@@ -296,6 +335,18 @@ class SplitItRepository:
                 row = cur.fetchone()
                 inserted.append(ReceiptItemRecord(id=str(row[0]), description=str(row[1]), price_cents=int(row[2])))
 
+            # Editing items re-opens the bill as draft until splits are submitted again.
+            cur.execute(
+                """
+                UPDATE receipt_images
+                SET
+                    status = 'draft',
+                    finalized_at = NULL
+                WHERE id = %s
+                """,
+                (receipt_image_id,),
+            )
+
             conn.commit()
             return inserted
 
@@ -311,6 +362,138 @@ class SplitItRepository:
                 (receipt_image_id,),
             )
             return [ReceiptItemRecord(id=row[0], description=row[1], price_cents=int(row[2])) for row in cur.fetchall()]
+
+    def list_bill_previews(self) -> list[BillPreviewRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id::text AS receipt_image_id,
+                    description AS bill_description,
+                    created_at AS entered_at,
+                    (image_blob IS NOT NULL OR image_path IS NOT NULL) AS has_image
+                FROM receipt_images
+                WHERE status = 'finalized'
+                ORDER BY created_at DESC, id DESC
+                """
+            )
+            return [
+                BillPreviewRecord(
+                    receipt_image_id=row[0],
+                    bill_description=row[1],
+                    entered_at=row[2],
+                    has_image=bool(row[3]),
+                )
+                for row in cur.fetchall()
+            ]
+
+    def get_receipt_image(self, *, receipt_image_id: str) -> ReceiptImageRecord | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT image_blob, image_path
+                FROM receipt_images
+                WHERE id = %s
+                """,
+                (receipt_image_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+            image_blob = bytes(row[0]) if row[0] is not None else None
+            return ReceiptImageRecord(
+                image_blob=image_blob,
+                image_path=row[1],
+            )
+
+    def get_bill_split_detail(self, *, receipt_image_id: str) -> BillSplitDetailRecord | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    ri.id::text AS receipt_image_id,
+                    ri.description AS bill_description,
+                    ri.created_at AS entered_at,
+                    (ri.image_blob IS NOT NULL OR ri.image_path IS NOT NULL) AS has_image,
+                    p.id::text AS participant_id,
+                    p.display_name AS participant_name,
+                    ritem.id::text AS receipt_item_id,
+                    ritem.description AS item_description,
+                    pia.amount_cents::int AS amount_cents
+                FROM receipt_images ri
+                LEFT JOIN receipt_items ritem
+                    ON ritem.receipt_image_id = ri.id
+                LEFT JOIN participant_item_allocations pia
+                    ON pia.receipt_item_id = ritem.id
+                LEFT JOIN participants p
+                    ON p.id = pia.participant_id
+                WHERE ri.id = %s
+                ORDER BY
+                    p.display_name ASC NULLS LAST,
+                    p.id ASC NULLS LAST,
+                    ritem.created_at ASC NULLS LAST,
+                    ritem.id ASC NULLS LAST
+                """,
+                (receipt_image_id,),
+            )
+            rows = cur.fetchall()
+
+        if not rows:
+            return None
+
+        receipt_id = rows[0][0]
+        bill_description = rows[0][1]
+        entered_at = rows[0][2]
+        has_image = bool(rows[0][3])
+
+        participants_map: dict[str, dict] = {}
+
+        for row in rows:
+            participant_id = row[4]
+            if participant_id is None:
+                continue
+
+            if participant_id not in participants_map:
+                participants_map[participant_id] = {
+                    "participant_name": row[5],
+                    "participant_total_cents": 0,
+                    "lines": [],
+                }
+
+            if row[6] is None:
+                continue
+
+            amount_cents = int(row[8])
+            participants_map[participant_id]["lines"].append(
+                BillSplitParticipantLine(
+                    receipt_item_id=row[6],
+                    item_description=row[7],
+                    amount_cents=amount_cents,
+                )
+            )
+            participants_map[participant_id]["participant_total_cents"] += amount_cents
+
+        participants = [
+            BillSplitParticipantRecord(
+                participant_id=participant_id,
+                participant_name=data["participant_name"],
+                participant_total_cents=data["participant_total_cents"],
+                lines=data["lines"],
+            )
+            for participant_id, data in participants_map.items()
+        ]
+
+        bill_total_cents = sum(participant.participant_total_cents for participant in participants)
+
+        return BillSplitDetailRecord(
+            receipt_image_id=receipt_id,
+            bill_description=bill_description,
+            entered_at=entered_at,
+            bill_total_cents=bill_total_cents,
+            has_image=has_image,
+            participants=participants,
+        )
 
     def list_participants(self) -> list[ParticipantRecord]:
         with self._connect() as conn, conn.cursor() as cur:
@@ -416,6 +599,17 @@ class SplitItRepository:
                     """,
                     (alloc.participant_id, alloc.receipt_item_id, alloc.amount_cents),
                 )
+
+            cur.execute(
+                """
+                UPDATE receipt_images
+                SET
+                    status = 'finalized',
+                    finalized_at = NOW()
+                WHERE id = %s
+                """,
+                (receipt_image_id,),
+            )
 
             conn.commit()
 

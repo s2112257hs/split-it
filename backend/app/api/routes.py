@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
+import mimetypes
 from datetime import datetime
 from typing import Dict
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_file
 
 from app.repositories.repository import (
     ItemAllocation,
@@ -66,6 +68,23 @@ def _folio_event_payload(event) -> dict:
         "receipt_image_id": event.receipt_image_id,
         "receipt_item_id": event.receipt_item_id,
     }
+
+
+def _guess_image_mimetype(image_bytes: bytes, image_path: str | None = None) -> str:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+        return "image/gif"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+
+    if image_path:
+        guessed, _ = mimetypes.guess_type(image_path)
+        if guessed:
+            return guessed
+    return "application/octet-stream"
 
 
 @api_bp.get("/health")
@@ -159,6 +178,117 @@ def replace_receipt_items(receipt_image_id: str):
         ),
         200,
     )
+
+
+@api_bp.get("/bills")
+def list_bills():
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        previews = repo.list_bill_previews()
+    except Exception:
+        return _json_error("Failed to fetch bills.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "bills": [
+                    {
+                        "receipt_image_id": preview.receipt_image_id,
+                        "bill_description": preview.bill_description,
+                        "entered_at": _isoformat(preview.entered_at),
+                        "has_image": preview.has_image,
+                        "preview_image_url": f"/api/receipts/{preview.receipt_image_id}/image",
+                    }
+                    for preview in previews
+                ]
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.get("/bills/<receipt_image_id>/details")
+def get_bill_split_details(receipt_image_id: str):
+    if not is_uuid(receipt_image_id):
+        return _json_error("Invalid receipt_image_id.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        details = repo.get_bill_split_detail(receipt_image_id=receipt_image_id)
+    except Exception:
+        return _json_error("Failed to fetch bill split details.", status=500, code="db_error")
+
+    if details is None:
+        return _json_error("Bill not found.", status=404, code="not_found")
+
+    return (
+        jsonify(
+            {
+                "receipt_image_id": details.receipt_image_id,
+                "bill_description": details.bill_description,
+                "entered_at": _isoformat(details.entered_at),
+                "bill_total_cents": details.bill_total_cents,
+                "has_image": details.has_image,
+                "show_bill_image_url": f"/api/receipts/{details.receipt_image_id}/image",
+                "participants": [
+                    {
+                        "participant_id": participant.participant_id,
+                        "participant_name": participant.participant_name,
+                        "participant_total_cents": participant.participant_total_cents,
+                        "lines": [
+                            {
+                                "receipt_item_id": line.receipt_item_id,
+                                "item_description": line.item_description,
+                                "amount_cents": line.amount_cents,
+                            }
+                            for line in participant.lines
+                        ],
+                    }
+                    for participant in details.participants
+                ],
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.get("/receipts/<receipt_image_id>/image")
+def get_receipt_image(receipt_image_id: str):
+    if not is_uuid(receipt_image_id):
+        return _json_error("Invalid receipt_image_id.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        image = repo.get_receipt_image(receipt_image_id=receipt_image_id)
+    except Exception:
+        return _json_error("Failed to fetch receipt image.", status=500, code="db_error")
+
+    if image is None:
+        return _json_error("Receipt image not found.", status=404, code="not_found")
+
+    if image.image_blob is not None:
+        mime_type = _guess_image_mimetype(image.image_blob, image.image_path)
+        return send_file(io.BytesIO(image.image_blob), mimetype=mime_type)
+
+    if image.image_path:
+        try:
+            mime_type = _guess_image_mimetype(b"", image.image_path)
+            return send_file(image.image_path, mimetype=mime_type)
+        except FileNotFoundError:
+            return _json_error("Receipt image file not found.", status=404, code="not_found")
+        except Exception:
+            return _json_error("Failed to read receipt image file.", status=500, code="file_error")
+
+    return _json_error("Receipt image not available.", status=404, code="not_found")
 
 
 @api_bp.get("/participants")

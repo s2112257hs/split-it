@@ -101,6 +101,199 @@ def test_replace_receipt_items_persists_and_returns_ids(client, monkeypatch):
     }
 
 
+def test_list_bills_returns_preview_cards(client, monkeypatch):
+    class BillPreview:
+        def __init__(self, receipt_image_id, bill_description, entered_at, has_image):
+            self.receipt_image_id = receipt_image_id
+            self.bill_description = bill_description
+            self.entered_at = entered_at
+            self.has_image = has_image
+
+    class FakeRepo:
+        enabled = True
+
+        def list_bill_previews(self):
+            return [
+                BillPreview(
+                    "11111111-1111-1111-1111-111111111111",
+                    "Uber from airport",
+                    datetime(2026, 3, 2, 9, 15, tzinfo=timezone.utc),
+                    True,
+                ),
+                BillPreview(
+                    "22222222-2222-2222-2222-222222222222",
+                    "Grocery run",
+                    datetime(2026, 3, 1, 19, 0, tzinfo=timezone.utc),
+                    False,
+                ),
+            ]
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/bills")
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "bills": [
+            {
+                "receipt_image_id": "11111111-1111-1111-1111-111111111111",
+                "bill_description": "Uber from airport",
+                "entered_at": "2026-03-02T09:15:00+00:00",
+                "has_image": True,
+                "preview_image_url": "/api/receipts/11111111-1111-1111-1111-111111111111/image",
+            },
+            {
+                "receipt_image_id": "22222222-2222-2222-2222-222222222222",
+                "bill_description": "Grocery run",
+                "entered_at": "2026-03-01T19:00:00+00:00",
+                "has_image": False,
+                "preview_image_url": "/api/receipts/22222222-2222-2222-2222-222222222222/image",
+            },
+        ]
+    }
+
+
+def test_get_receipt_image_streams_blob(client, monkeypatch):
+    class Image:
+        image_blob = b"\x89PNG\r\n\x1a\nfakepng"
+        image_path = None
+
+    class FakeRepo:
+        enabled = True
+
+        def get_receipt_image(self, *, receipt_image_id):
+            assert receipt_image_id == "11111111-1111-1111-1111-111111111111"
+            return Image()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/receipts/11111111-1111-1111-1111-111111111111/image")
+    assert r.status_code == 200
+    assert r.mimetype == "image/png"
+    assert r.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_get_receipt_image_not_found(client, monkeypatch):
+    class FakeRepo:
+        enabled = True
+
+        def get_receipt_image(self, *, receipt_image_id):
+            assert receipt_image_id == "11111111-1111-1111-1111-111111111111"
+            return None
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/receipts/11111111-1111-1111-1111-111111111111/image")
+    assert r.status_code == 404
+    assert r.get_json()["error"]["code"] == "not_found"
+
+
+def test_get_bill_split_details(client, monkeypatch):
+    class Line:
+        def __init__(self, receipt_item_id, item_description, amount_cents):
+            self.receipt_item_id = receipt_item_id
+            self.item_description = item_description
+            self.amount_cents = amount_cents
+
+    class Participant:
+        def __init__(self, participant_id, participant_name, participant_total_cents, lines):
+            self.participant_id = participant_id
+            self.participant_name = participant_name
+            self.participant_total_cents = participant_total_cents
+            self.lines = lines
+
+    class Details:
+        receipt_image_id = "11111111-1111-1111-1111-111111111111"
+        bill_description = "Lidl Wembley"
+        entered_at = datetime(2026, 3, 3, 12, 0, tzinfo=timezone.utc)
+        bill_total_cents = 247
+        has_image = True
+        participants = [
+            Participant(
+                "p1",
+                "Ifham",
+                180,
+                [
+                    Line("i1", "Milk", 30),
+                    Line("i2", "Eggs", 150),
+                ],
+            ),
+            Participant(
+                "p2",
+                "Alice",
+                67,
+                [
+                    Line("i3", "Croissant", 67),
+                ],
+            ),
+        ]
+
+    class FakeRepo:
+        enabled = True
+
+        def get_bill_split_detail(self, *, receipt_image_id):
+            assert receipt_image_id == "11111111-1111-1111-1111-111111111111"
+            return Details()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/bills/11111111-1111-1111-1111-111111111111/details")
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "receipt_image_id": "11111111-1111-1111-1111-111111111111",
+        "bill_description": "Lidl Wembley",
+        "entered_at": "2026-03-03T12:00:00+00:00",
+        "bill_total_cents": 247,
+        "has_image": True,
+        "show_bill_image_url": "/api/receipts/11111111-1111-1111-1111-111111111111/image",
+        "participants": [
+            {
+                "participant_id": "p1",
+                "participant_name": "Ifham",
+                "participant_total_cents": 180,
+                "lines": [
+                    {
+                        "receipt_item_id": "i1",
+                        "item_description": "Milk",
+                        "amount_cents": 30,
+                    },
+                    {
+                        "receipt_item_id": "i2",
+                        "item_description": "Eggs",
+                        "amount_cents": 150,
+                    },
+                ],
+            },
+            {
+                "participant_id": "p2",
+                "participant_name": "Alice",
+                "participant_total_cents": 67,
+                "lines": [
+                    {
+                        "receipt_item_id": "i3",
+                        "item_description": "Croissant",
+                        "amount_cents": 67,
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def test_get_bill_split_details_not_found(client, monkeypatch):
+    class FakeRepo:
+        enabled = True
+
+        def get_bill_split_detail(self, *, receipt_image_id):
+            assert receipt_image_id == "11111111-1111-1111-1111-111111111111"
+            return None
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/bills/11111111-1111-1111-1111-111111111111/details")
+    assert r.status_code == 404
+    assert r.get_json()["error"]["code"] == "not_found"
+
+
 def test_list_participants(client, monkeypatch):
     class Row:
         def __init__(self, participant_id, display_name, running_total_cents):

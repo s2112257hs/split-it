@@ -6,7 +6,11 @@ CREATE TABLE IF NOT EXISTS receipt_images (
     description TEXT NOT NULL,
     image_blob BYTEA,
     image_path TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    finalized_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT receipt_images_status_check
+        CHECK (status IN ('draft', 'finalized')),
     CONSTRAINT receipt_images_storage_check
         CHECK ((image_blob IS NOT NULL) <> (image_path IS NOT NULL))
 );

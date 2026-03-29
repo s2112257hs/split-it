@@ -1,5 +1,8 @@
 import type {
   AssignmentsMap,
+  BillPreview,
+  BillSplitDetail,
+  BillPreviewsResponse,
   CalculateSplitResponse,
   CreateReceiptResponse,
   FolioRepaymentResponse,
@@ -166,6 +169,29 @@ export async function getParticipantLedger(args: {
 
   if (!Array.isArray(data.bills) || typeof data.computed_total_cents !== "number") {
     throw new Error("Unexpected response from /api/participants/{participant_id}/ledger.");
+  }
+
+  return data;
+}
+
+export async function listBillPreviews(apiBase: string): Promise<BillPreview[]> {
+  const data = await requestJson<BillPreviewsResponse>(`${apiBase}/api/bills`);
+  if (!Array.isArray(data.bills)) {
+    throw new Error("Unexpected response from /api/bills.");
+  }
+  return data.bills;
+}
+
+export async function getBillSplitDetail(args: {
+  receiptImageId: string;
+  apiBase: string;
+}): Promise<BillSplitDetail> {
+  const data = await requestJson<BillSplitDetail>(
+    `${args.apiBase}/api/bills/${args.receiptImageId}/details`
+  );
+
+  if (!Array.isArray(data.participants) || typeof data.bill_total_cents !== "number") {
+    throw new Error("Unexpected response from /api/bills/{receipt_image_id}/details.");
   }
 
   return data;
