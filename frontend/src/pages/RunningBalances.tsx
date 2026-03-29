@@ -8,12 +8,6 @@ type Props = {
   onBackHome: () => void;
 };
 
-function formatEventAt(isoDateTime: string): string {
-  const d = new Date(isoDateTime);
-  if (Number.isNaN(d.getTime())) return isoDateTime;
-  return d.toLocaleString();
-}
-
 export default function RunningBalances({ apiBase, onBackHome }: Props) {
   const [participants, setParticipants] = useState<RunningBalanceParticipant[]>([]);
   const [expandedParticipantIds, setExpandedParticipantIds] = useState<Record<string, boolean>>({});
@@ -151,81 +145,53 @@ export default function RunningBalances({ apiBase, onBackHome }: Props) {
                       ) : (
                         <>
                           <div className="helper">Showing activity since last settled point.</div>
-
-                          {participant.bills.length > 0 && (
-                            <table className="table" style={{ minWidth: 0 }}>
-                              <tbody>
-                                {participant.bills.map((bill) => (
-                                  <Fragment key={bill.receipt_id}>
-                                    <tr key={`${bill.receipt_id}-header`}>
-                                      <td colSpan={3}><strong>{bill.bill_description}</strong></td>
-                                    </tr>
-                                    {bill.lines.map((line) => (
-                                      <tr key={line.receipt_item_id}>
-                                        <td>
-                                          <div className="row" style={{ justifyContent: "space-between" }}>
-                                            <span>{line.item_name}</span>
-                                            <span>{centsToUsdString(line.contribution_cents)}</span>
-                                          </div>
-                                        </td>
-                                        <td style={{ textAlign: "right" }} />
-                                        <td style={{ textAlign: "right" }} />
-                                      </tr>
-                                    ))}
-                                    <tr key={`${bill.receipt_id}-total`}>
-                                      <td>
-                                        <strong><span>Bill Total</span></strong>
-                                      </td>
-                                      <td style={{ textAlign: "right" }} />
-                                      <td style={{ textAlign: "right" }}><strong>{centsToUsdString(bill.bill_total_cents)}</strong></td>
-                                    </tr>
-                                  </Fragment>
-                                ))}
-                              </tbody>
-                            </table>
-                          )}
-
-
-                          {participant.repayment_events.length > 0 && (
-                            <div className="stack">
-                              <div className="helper">Repayments you made to participant</div>
-                              <table className="table" style={{ minWidth: 0 }}>
-                                <thead>
-                                  <tr>
-                                    <th>Date</th>
-                                    <th>Details</th>
-                                    <th style={{ textAlign: "right" }}>Amount</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {participant.repayment_events.map((event) => (
-                                    <tr key={event.event_id}>
-                                      <td>{formatEventAt(event.event_at)}</td>
-                                      <td>{event.reference_details}</td>
-                                      <td style={{ textAlign: "right" }}>{centsToUsdString(event.amount_cents)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-
                           <table className="table" style={{ minWidth: 0 }}>
                             <tbody>
+                              {participant.bills.map((bill) => (
+                                <Fragment key={bill.receipt_id}>
+                                  <tr key={`${bill.receipt_id}-header`}>
+                                    <td colSpan={4}><strong>{bill.bill_description}</strong></td>
+                                  </tr>
+                                  {bill.lines.map((line) => (
+                                    <tr key={line.receipt_item_id}>
+                                      <td>{line.item_name}</td>
+                                      <td style={{ textAlign: "right" }}>{centsToUsdString(line.contribution_cents)}</td>
+                                      <td />
+                                      <td />
+                                    </tr>
+                                  ))}
+                                  <tr key={`${bill.receipt_id}-total`}>
+                                    <td><strong>Bill Total</strong></td>
+                                    <td />
+                                    <td style={{ textAlign: "right" }}><strong>{centsToUsdString(bill.bill_total_cents)}</strong></td>
+                                    <td />
+                                  </tr>
+                                </Fragment>
+                              ))}
+
                               <tr>
                                 <td><strong>Bills total</strong></td>
+                                <td />
                                 <td />
                                 <td style={{ textAlign: "right" }}><strong>{centsToUsdString(billsTotalCents)}</strong></td>
                               </tr>
                               <tr>
                                 <td><strong>Payments received from {participant.participant_name}</strong></td>
                                 <td />
-                                <td style={{ textAlign: "right" }}><strong>{centsToUsdString(paymentsReceivedCents)}</strong></td>
+                                <td />
+                                <td style={{ textAlign: "right" }}><strong>-{centsToUsdString(paymentsReceivedCents)}</strong></td>
                               </tr>
                               <tr>
-                                <td><strong>Repayments sent to {participant.participant_name}</strong></td>
+                                <td><strong>Repayments made to {participant.participant_name}</strong></td>
+                                <td />
                                 <td />
                                 <td style={{ textAlign: "right" }}><strong>{centsToUsdString(repaymentsSentCents)}</strong></td>
+                              </tr>
+                              <tr>
+                                <td><strong>Total running balance</strong></td>
+                                <td />
+                                <td />
+                                <td style={{ textAlign: "right" }}><strong>{centsToUsdString(participant.participant_total_cents)}</strong></td>
                               </tr>
                             </tbody>
                           </table>
