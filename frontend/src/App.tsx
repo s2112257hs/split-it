@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import HomePage from "./pages/HomePage";
 import RunningBalances from "./pages/RunningBalances";
+import SettleBalances from "./pages/SettleBalances";
 import SplitFlow from "./pages/SplitFlow";
 
-type AppRoute = "home" | "split" | "balances";
+type AppRoute = "home" | "split" | "balances" | "settle";
 
 function routeFromPath(pathname: string): AppRoute {
   if (pathname === "/split") {
@@ -12,6 +13,10 @@ function routeFromPath(pathname: string): AppRoute {
 
   if (pathname === "/balances") {
     return "balances";
+  }
+
+  if (pathname === "/settle") {
+    return "settle";
   }
 
   return "home";
@@ -46,5 +51,15 @@ export default function App() {
     return <RunningBalances apiBase={apiBase} onBackHome={() => navigate("/", setRoute)} />;
   }
 
-  return <HomePage onAddBill={() => navigate("/split", setRoute)} onCheckBalances={() => navigate("/balances", setRoute)} />;
+  if (route === "settle") {
+    return <SettleBalances apiBase={apiBase} onBackHome={() => navigate("/", setRoute)} />;
+  }
+
+  return (
+    <HomePage
+      onAddBill={() => navigate("/split", setRoute)}
+      onCheckBalances={() => navigate("/balances", setRoute)}
+      onSettleBalances={() => navigate("/settle", setRoute)}
+    />
+  );
 }

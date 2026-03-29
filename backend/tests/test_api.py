@@ -1,4 +1,5 @@
 import io
+from datetime import datetime, timezone
 
 import pytest
 from flask import Flask
@@ -129,10 +130,12 @@ def test_list_participants(client, monkeypatch):
 
 def test_get_running_balances_groups_bills_and_totals(client, monkeypatch):
     class ParticipantRow:
-        def __init__(self, participant_id, participant_name, lines):
+        def __init__(self, participant_id, participant_name, lines, settlement_events, repayment_events):
             self.participant_id = participant_id
             self.participant_name = participant_name
             self.lines = lines
+            self.settlement_events = settlement_events
+            self.repayment_events = repayment_events
 
     class Line:
         def __init__(self, receipt_id, bill_description, receipt_item_id, item_name, contribution_cents):
@@ -141,6 +144,13 @@ def test_get_running_balances_groups_bills_and_totals(client, monkeypatch):
             self.receipt_item_id = receipt_item_id
             self.item_name = item_name
             self.contribution_cents = contribution_cents
+
+    class Event:
+        def __init__(self, event_id, event_at, amount_cents, reference_details):
+            self.event_id = event_id
+            self.event_at = event_at
+            self.amount_cents = amount_cents
+            self.reference_details = reference_details
 
     class FakeRepo:
         enabled = True
@@ -155,8 +165,40 @@ def test_get_running_balances_groups_bills_and_totals(client, monkeypatch):
                         Line("r2", "Dinner", "i3", "Soda", 300),
                         Line("r1", "Lunch", "i1", "Soup", 700),
                     ],
+                    [
+                        Event(
+                            "settlement:s-1",
+                            datetime(2026, 1, 2, 11, 30, tzinfo=timezone.utc),
+                            200,
+                            "Bank transfer",
+                        )
+                    ],
+                    [],
                 ),
-                ParticipantRow("p-bob", "Bob", []),
+                ParticipantRow("p-bob", "Bob", [], [], []),
+            ]
+
+        def list_participant_folios(self):
+            class Summary:
+                def __init__(
+                    self,
+                    participant_id,
+                    total_charged_cents,
+                    total_settled_cents,
+                    total_repaid_cents,
+                    net_balance_cents,
+                    status,
+                ):
+                    self.participant_id = participant_id
+                    self.total_charged_cents = total_charged_cents
+                    self.total_settled_cents = total_settled_cents
+                    self.total_repaid_cents = total_repaid_cents
+                    self.net_balance_cents = net_balance_cents
+                    self.status = status
+
+            return [
+                Summary("p-alice", 2500, 200, 0, 2300, "owes_you"),
+                Summary("p-bob", 0, 0, 0, 0, "settled"),
             ]
 
     monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
@@ -169,7 +211,12 @@ def test_get_running_balances_groups_bills_and_totals(client, monkeypatch):
             {
                 "participant_id": "p-alice",
                 "participant_name": "Alice",
-                "participant_total_cents": 2500,
+                "participant_total_cents": 2300,
+                "total_charged_cents": 2500,
+                "total_settled_cents": 200,
+                "total_repaid_cents": 0,
+                "net_balance_cents": 2300,
+                "status": "owes_you",
                 "bills": [
                     {
                         "receipt_id": "r2",
@@ -189,12 +236,28 @@ def test_get_running_balances_groups_bills_and_totals(client, monkeypatch):
                         ],
                     },
                 ],
+                "settlement_events": [
+                    {
+                        "event_id": "settlement:s-1",
+                        "event_at": "2026-01-02T11:30:00+00:00",
+                        "amount_cents": 200,
+                        "reference_details": "Bank transfer",
+                    }
+                ],
+                "repayment_events": [],
             },
             {
                 "participant_id": "p-bob",
                 "participant_name": "Bob",
                 "participant_total_cents": 0,
+                "total_charged_cents": 0,
+                "total_settled_cents": 0,
+                "total_repaid_cents": 0,
+                "net_balance_cents": 0,
+                "status": "settled",
                 "bills": [],
+                "settlement_events": [],
+                "repayment_events": [],
             },
         ]
     }
@@ -383,4 +446,394 @@ def test_get_participant_ledger_groups_lines_and_computes_total(client, monkeypa
                 "lines": [{"receipt_item_id": "i1", "item_description": "Soup", "amount_cents": 700}],
             },
         ],
+    }
+
+
+def test_list_participant_folios(client, monkeypatch):
+    class Summary:
+        def __init__(self, participant_id, display_name, charged, settled, repaid, net, status, overpayment):
+            self.participant_id = participant_id
+            self.display_name = display_name
+            self.total_charged_cents = charged
+            self.total_settled_cents = settled
+            self.total_repaid_cents = repaid
+            self.net_balance_cents = net
+            self.status = status
+            self.overpayment_cents = overpayment
+
+    class FakeRepo:
+        enabled = True
+
+        def list_participant_folios(self):
+            return [
+                Summary("p1", "Alice", 1000, 400, 0, 600, "owes_you", 0),
+                Summary("p2", "Bob", 1000, 1300, 200, -100, "you_owe_them", 100),
+            ]
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/participants/folios")
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "folios": [
+            {
+                "participant_id": "p1",
+                "display_name": "Alice",
+                "total_charged_cents": 1000,
+                "total_settled_cents": 400,
+                "total_repaid_cents": 0,
+                "net_balance_cents": 600,
+                "status": "owes_you",
+                "overpayment_cents": 0,
+            },
+            {
+                "participant_id": "p2",
+                "display_name": "Bob",
+                "total_charged_cents": 1000,
+                "total_settled_cents": 1300,
+                "total_repaid_cents": 200,
+                "net_balance_cents": -100,
+                "status": "you_owe_them",
+                "overpayment_cents": 100,
+            },
+        ]
+    }
+
+
+def test_get_participant_folio_returns_event_history(client, monkeypatch):
+    class Summary:
+        participant_id = "22222222-2222-2222-2222-222222222222"
+        display_name = "Alice"
+        total_charged_cents = 1000
+        total_settled_cents = 400
+        total_repaid_cents = 0
+        net_balance_cents = 600
+        status = "owes_you"
+        overpayment_cents = 0
+
+    class Event:
+        def __init__(self, event_id, event_at, event_type, amount_cents, prev_net, new_net, ref):
+            self.event_id = event_id
+            self.event_at = event_at
+            self.event_type = event_type
+            self.amount_cents = amount_cents
+            self.previous_net_balance_cents = prev_net
+            self.new_net_balance_cents = new_net
+            self.reference_details = ref
+            self.receipt_image_id = "r1" if event_type == "charge" else None
+            self.receipt_item_id = "i1" if event_type == "charge" else None
+
+    class Folio:
+        summary = Summary()
+        charge_events = [
+            Event(
+                "evt-charge-1",
+                datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+                "charge",
+                1000,
+                0,
+                1000,
+                "Dinner | Pasta",
+            )
+        ]
+        settlement_events = [
+            Event(
+                "evt-settle-1",
+                datetime(2026, 1, 2, 11, 30, tzinfo=timezone.utc),
+                "settlement",
+                400,
+                1000,
+                600,
+                "Bank transfer",
+            )
+        ]
+        repayment_events = []
+
+    class FakeRepo:
+        enabled = True
+
+        def get_participant_folio(self, *, participant_id, max_events):
+            assert participant_id == "22222222-2222-2222-2222-222222222222"
+            assert max_events == 100
+            return Folio()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.get("/api/participants/22222222-2222-2222-2222-222222222222/folio")
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "participant_id": "22222222-2222-2222-2222-222222222222",
+        "display_name": "Alice",
+        "total_charged_cents": 1000,
+        "total_settled_cents": 400,
+        "total_repaid_cents": 0,
+        "net_balance_cents": 600,
+        "status": "owes_you",
+        "overpayment_cents": 0,
+        "charge_events": [
+            {
+                "event_id": "evt-charge-1",
+                "event_at": "2026-01-01T10:00:00+00:00",
+                "type": "charge",
+                "amount_cents": 1000,
+                "previous_net_balance_cents": 0,
+                "new_net_balance_cents": 1000,
+                "previous_owed_cents": 0,
+                "new_owed_cents": 1000,
+                "reference_details": "Dinner | Pasta",
+                "receipt_image_id": "r1",
+                "receipt_item_id": "i1",
+            }
+        ],
+        "settlement_events": [
+            {
+                "event_id": "evt-settle-1",
+                "event_at": "2026-01-02T11:30:00+00:00",
+                "type": "settlement",
+                "amount_cents": 400,
+                "previous_net_balance_cents": 1000,
+                "new_net_balance_cents": 600,
+                "previous_owed_cents": 1000,
+                "new_owed_cents": 600,
+                "reference_details": "Bank transfer",
+                "receipt_image_id": None,
+                "receipt_item_id": None,
+            }
+        ],
+        "repayment_events": [],
+    }
+
+
+def test_create_settlement_exact_paydown(client, monkeypatch):
+    class Result:
+        settlement_id = "s1"
+        previous_net_balance_cents = 1000
+        settlement_amount_cents = 1000
+        new_net_balance_cents = 0
+        status = "settled"
+        overpayment_cents = 0
+        idempotency_replayed = False
+
+    class FakeRepo:
+        enabled = True
+
+        def create_participant_settlement(self, **kwargs):
+            assert kwargs["amount_cents"] == 1000
+            return Result()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settlements",
+        json={"amount_cents": 1000, "note": "Exact paydown"},
+    )
+    assert r.status_code == 200
+    assert r.get_json()["new_net_balance_cents"] == 0
+    assert r.get_json()["status"] == "settled"
+    assert r.get_json()["overpayment_happened"] is False
+
+
+def test_create_settlement_partial_paydown(client, monkeypatch):
+    class Result:
+        settlement_id = "s2"
+        previous_net_balance_cents = 1000
+        settlement_amount_cents = 400
+        new_net_balance_cents = 600
+        status = "owes_you"
+        overpayment_cents = 0
+        idempotency_replayed = False
+
+    class FakeRepo:
+        enabled = True
+
+        def create_participant_settlement(self, **kwargs):
+            assert kwargs["amount_cents"] == 400
+            return Result()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settlements",
+        json={"amount_cents": 400},
+    )
+    assert r.status_code == 200
+    assert r.get_json()["previous_net_balance_cents"] == 1000
+    assert r.get_json()["new_net_balance_cents"] == 600
+    assert r.get_json()["status"] == "owes_you"
+
+
+def test_create_settlement_overpayment(client, monkeypatch):
+    class Result:
+        settlement_id = "s3"
+        previous_net_balance_cents = 1000
+        settlement_amount_cents = 1300
+        new_net_balance_cents = -300
+        status = "you_owe_them"
+        overpayment_cents = 300
+        idempotency_replayed = False
+
+    class FakeRepo:
+        enabled = True
+
+        def create_participant_settlement(self, **kwargs):
+            assert kwargs["amount_cents"] == 1300
+            return Result()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settlements",
+        json={"amount_cents": 1300},
+    )
+    assert r.status_code == 200
+    assert r.get_json()["new_net_balance_cents"] == -300
+    assert r.get_json()["status"] == "you_owe_them"
+    assert r.get_json()["overpayment_cents"] == 300
+    assert r.get_json()["overpayment_happened"] is True
+
+
+def test_create_settlement_duplicate_idempotency_key_is_replayed(client, monkeypatch):
+    class Result:
+        settlement_id = "s4"
+        previous_net_balance_cents = 1000
+        settlement_amount_cents = 400
+        new_net_balance_cents = 600
+        status = "owes_you"
+        overpayment_cents = 0
+        idempotency_replayed = True
+
+    class FakeRepo:
+        enabled = True
+
+        def create_participant_settlement(self, **kwargs):
+            assert kwargs["idempotency_key"] == "idem-abc"
+            return Result()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settlements",
+        json={"amount_cents": 400, "idempotency_key": "idem-abc"},
+    )
+    assert r.status_code == 200
+    assert r.get_json()["idempotency_replayed"] is True
+    assert r.get_json()["settlement_amount_cents"] == 400
+
+
+def test_reverse_settlement_behavior(client, monkeypatch):
+    class Result:
+        settlement_id = "44444444-4444-4444-4444-444444444444"
+        previous_net_balance_cents = -300
+        reversed_settlement_amount_cents = 1300
+        new_net_balance_cents = 1000
+        status = "owes_you"
+        overpayment_cents = 0
+        reversal_applied = True
+
+    class FakeRepo:
+        enabled = True
+
+        def reverse_participant_settlement(self, **kwargs):
+            assert kwargs["participant_id"] == "22222222-2222-2222-2222-222222222222"
+            assert kwargs["settlement_id"] == "44444444-4444-4444-4444-444444444444"
+            return Result()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settlements/44444444-4444-4444-4444-444444444444/reverse",
+        json={"note": "Correction"},
+    )
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "transaction_type": "settlement_reversal",
+        "settlement_id": "44444444-4444-4444-4444-444444444444",
+        "previous_net_balance_cents": -300,
+        "reversed_settlement_amount_cents": 1300,
+        "new_net_balance_cents": 1000,
+        "status": "owes_you",
+        "overpayment_cents": 0,
+        "reversal_applied": True,
+    }
+
+
+def test_create_settlement_invalid_payload_returns_400(client):
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/settlements",
+        json={"amount_cents": 0, "paid_at": "not-a-time"},
+    )
+    assert r.status_code == 400
+    assert "amount_cents" in r.get_json()["error"]["message"]
+
+
+def test_create_repayment(client, monkeypatch):
+    class Result:
+        repayment_id = "repay-1"
+        previous_net_balance_cents = -300
+        repayment_amount_cents = 300
+        new_net_balance_cents = 0
+        status = "settled"
+        overpayment_cents = 0
+        idempotency_replayed = False
+
+    class FakeRepo:
+        enabled = True
+
+        def create_participant_repayment(self, **kwargs):
+            assert kwargs["amount_cents"] == 300
+            return Result()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/repayments",
+        json={"amount_cents": 300, "note": "Returned overpay"},
+    )
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "transaction_type": "repayment",
+        "repayment_id": "repay-1",
+        "previous_net_balance_cents": -300,
+        "repayment_amount_cents": 300,
+        "new_net_balance_cents": 0,
+        "status": "settled",
+        "overpayment_cents": 0,
+        "idempotency_replayed": False,
+    }
+
+
+def test_reverse_repayment(client, monkeypatch):
+    class Result:
+        repayment_id = "repay-1"
+        previous_net_balance_cents = 0
+        reversed_repayment_amount_cents = 300
+        new_net_balance_cents = -300
+        status = "you_owe_them"
+        overpayment_cents = 300
+        reversal_applied = True
+
+    class FakeRepo:
+        enabled = True
+
+        def reverse_participant_repayment(self, **kwargs):
+            assert kwargs["participant_id"] == "22222222-2222-2222-2222-222222222222"
+            assert kwargs["repayment_id"] == "55555555-5555-5555-5555-555555555555"
+            return Result()
+
+    monkeypatch.setattr("app.api.routes._repo", lambda: FakeRepo())
+
+    r = client.post(
+        "/api/participants/22222222-2222-2222-2222-222222222222/repayments/55555555-5555-5555-5555-555555555555/reverse",
+        json={"note": "Undo"},
+    )
+    assert r.status_code == 200
+    assert r.get_json() == {
+        "transaction_type": "repayment_reversal",
+        "repayment_id": "repay-1",
+        "previous_net_balance_cents": 0,
+        "reversed_repayment_amount_cents": 300,
+        "new_net_balance_cents": -300,
+        "status": "you_owe_them",
+        "overpayment_cents": 300,
+        "reversal_applied": True,
     }

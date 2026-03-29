@@ -64,6 +64,46 @@ export type ParticipantLedger = {
   bills: ParticipantLedgerBill[];
 };
 
+export type FolioStatus = "owes_you" | "settled" | "you_owe_them";
+
+export type ParticipantFolioSummary = {
+  participant_id: string;
+  display_name: string;
+  total_charged_cents: number;
+  total_settled_cents: number;
+  total_repaid_cents: number;
+  net_balance_cents: number;
+  status: FolioStatus;
+  overpayment_cents: number;
+};
+
+export type ParticipantFoliosResponse = {
+  folios: ParticipantFolioSummary[];
+};
+
+export type FolioSettlementResponse = {
+  transaction_type: "settlement";
+  settlement_id: string;
+  previous_net_balance_cents: number;
+  payment_amount_cents: number;
+  settlement_amount_cents: number;
+  new_net_balance_cents: number;
+  status: FolioStatus;
+  overpayment_cents: number;
+  overpayment_happened: boolean;
+  idempotency_replayed: boolean;
+};
+
+export type FolioRepaymentResponse = {
+  transaction_type: "repayment";
+  repayment_id: string;
+  previous_net_balance_cents: number;
+  repayment_amount_cents: number;
+  new_net_balance_cents: number;
+  status: FolioStatus;
+  overpayment_cents: number;
+  idempotency_replayed: boolean;
+};
 
 export type RunningBalanceLine = {
   receipt_item_id: string;
@@ -78,11 +118,25 @@ export type RunningBalanceBill = {
   lines: RunningBalanceLine[];
 };
 
+export type RunningBalanceTransactionEvent = {
+  event_id: string;
+  event_at: string;
+  amount_cents: number;
+  reference_details: string;
+};
+
 export type RunningBalanceParticipant = {
   participant_id: string;
   participant_name: string;
   participant_total_cents: number;
+  total_charged_cents: number;
+  total_settled_cents: number;
+  total_repaid_cents: number;
+  net_balance_cents: number;
+  status: FolioStatus;
   bills: RunningBalanceBill[];
+  settlement_events: RunningBalanceTransactionEvent[];
+  repayment_events: RunningBalanceTransactionEvent[];
 };
 
 export type RunningBalancesResponse = {

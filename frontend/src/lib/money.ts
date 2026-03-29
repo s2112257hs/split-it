@@ -30,3 +30,26 @@ export function usdStringToCents(input: string): number {
 
   return dollars * 100 + centsPart;
 }
+
+/**
+ * Parse signed USD string to cents.
+ * Accepts: "-12.34", "+12.34", "12.34", "$12.34", "-$12.34"
+ */
+export function usdSignedStringToCents(input: string): number {
+  const raw = input.trim().replace(/\$/g, "");
+  if (!raw) throw new Error("Amount is required.");
+
+  const normalized = raw.replace(/^\+/, "");
+  if (!/^-?\d+(\.\d{0,2})?$/.test(normalized)) {
+    throw new Error("Enter a valid amount like 12.34 or -12.34");
+  }
+
+  const isNegative = normalized.startsWith("-");
+  const unsigned = isNegative ? normalized.slice(1) : normalized;
+  const [whole, frac = ""] = unsigned.split(".");
+
+  const dollars = Number(whole);
+  const centsPart = Number((frac + "00").slice(0, 2));
+  const cents = dollars * 100 + centsPart;
+  return isNegative ? -cents : cents;
+}

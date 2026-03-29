@@ -2,9 +2,13 @@ import type {
   AssignmentsMap,
   CalculateSplitResponse,
   CreateReceiptResponse,
+  FolioRepaymentResponse,
+  FolioSettlementResponse,
   Item,
   Participant,
+  ParticipantFolioSummary,
   ParticipantLedger,
+  ParticipantFoliosResponse,
   RunningBalancesResponse,
 } from "../types/split";
 import { requestJson } from "./http";
@@ -90,6 +94,57 @@ export async function createParticipant(args: { display_name: string; apiBase: s
   });
 }
 
+export async function listParticipantFolios(apiBase: string): Promise<ParticipantFolioSummary[]> {
+  const data = await requestJson<ParticipantFoliosResponse>(`${apiBase}/api/participants/folios`);
+  if (!Array.isArray(data.folios)) {
+    throw new Error("Unexpected response from /api/participants/folios.");
+  }
+  return data.folios;
+}
+
+export async function createParticipantSettlement(args: {
+  participantId: string;
+  amount_cents: number;
+  note?: string;
+  paid_at?: string;
+  idempotency_key?: string;
+  apiBase: string;
+}): Promise<FolioSettlementResponse> {
+  return requestJson<FolioSettlementResponse>(`${args.apiBase}/api/participants/${args.participantId}/settlements`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      amount_cents: args.amount_cents,
+      note: args.note,
+      paid_at: args.paid_at,
+      idempotency_key: args.idempotency_key,
+    }),
+  });
+}
+
+export async function createParticipantRepayment(args: {
+  participantId: string;
+  amount_cents: number;
+  note?: string;
+  paid_at?: string;
+  idempotency_key?: string;
+  apiBase: string;
+}): Promise<FolioRepaymentResponse> {
+  return requestJson<FolioRepaymentResponse>(`${args.apiBase}/api/participants/${args.participantId}/repayments`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      amount_cents: args.amount_cents,
+      note: args.note,
+      paid_at: args.paid_at,
+      idempotency_key: args.idempotency_key,
+    }),
+  });
+}
 
 export async function getRunningBalances(apiBase: string): Promise<RunningBalancesResponse> {
   const data = await requestJson<RunningBalancesResponse>(`${apiBase}/api/running-balances`);
