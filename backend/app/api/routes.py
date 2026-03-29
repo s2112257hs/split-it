@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import io
+import mimetypes
+from datetime import datetime
 from typing import Dict
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_file
 
-from app.db.repository import ItemAllocation, SplitItRepository
+from app.repositories.repository import (
+    ItemAllocation,
+    RepositoryConflictError,
+    RepositoryNotFoundError,
+    SplitItRepository,
+)
 from app.domain.split_logic import SplitLogicError, split_cents_fair_remainder
 from app.services import ocr_service
 from app.services.receipt_parser import ReceiptParseError, extract_items_from_ocr_text
 from app.api.validators import (
     ApiValidationError,
     is_uuid,
+    parse_optional_iso_datetime,
+    parse_optional_string,
+    parse_positive_cents,
     parse_receipt_items,
     parse_unique_participant_ids,
 )
@@ -24,6 +35,56 @@ def _json_error(message: str, *, status: int = 400, code: str = "bad_request"):
 
 def _repo() -> SplitItRepository:
     return SplitItRepository(current_app.config.get("DATABASE_URL", ""))
+
+
+def _isoformat(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _folio_summary_payload(summary) -> dict:
+    return {
+        "participant_id": summary.participant_id,
+        "display_name": summary.display_name,
+        "total_charged_cents": summary.total_charged_cents,
+        "total_settled_cents": summary.total_settled_cents,
+        "total_repaid_cents": summary.total_repaid_cents,
+        "net_balance_cents": summary.net_balance_cents,
+        "status": summary.status,
+        "overpayment_cents": summary.overpayment_cents,
+    }
+
+
+def _folio_event_payload(event) -> dict:
+    return {
+        "event_id": event.event_id,
+        "event_at": _isoformat(event.event_at),
+        "type": event.event_type,
+        "amount_cents": event.amount_cents,
+        "previous_net_balance_cents": event.previous_net_balance_cents,
+        "new_net_balance_cents": event.new_net_balance_cents,
+        "previous_owed_cents": event.previous_net_balance_cents,
+        "new_owed_cents": event.new_net_balance_cents,
+        "reference_details": event.reference_details,
+        "receipt_image_id": event.receipt_image_id,
+        "receipt_item_id": event.receipt_item_id,
+    }
+
+
+def _guess_image_mimetype(image_bytes: bytes, image_path: str | None = None) -> str:
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+        return "image/gif"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+
+    if image_path:
+        guessed, _ = mimetypes.guess_type(image_path)
+        if guessed:
+            return guessed
+    return "application/octet-stream"
 
 
 @api_bp.get("/health")
@@ -119,6 +180,117 @@ def replace_receipt_items(receipt_image_id: str):
     )
 
 
+@api_bp.get("/bills")
+def list_bills():
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        previews = repo.list_bill_previews()
+    except Exception:
+        return _json_error("Failed to fetch bills.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "bills": [
+                    {
+                        "receipt_image_id": preview.receipt_image_id,
+                        "bill_description": preview.bill_description,
+                        "entered_at": _isoformat(preview.entered_at),
+                        "has_image": preview.has_image,
+                        "preview_image_url": f"/api/receipts/{preview.receipt_image_id}/image",
+                    }
+                    for preview in previews
+                ]
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.get("/bills/<receipt_image_id>/details")
+def get_bill_split_details(receipt_image_id: str):
+    if not is_uuid(receipt_image_id):
+        return _json_error("Invalid receipt_image_id.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        details = repo.get_bill_split_detail(receipt_image_id=receipt_image_id)
+    except Exception:
+        return _json_error("Failed to fetch bill split details.", status=500, code="db_error")
+
+    if details is None:
+        return _json_error("Bill not found.", status=404, code="not_found")
+
+    return (
+        jsonify(
+            {
+                "receipt_image_id": details.receipt_image_id,
+                "bill_description": details.bill_description,
+                "entered_at": _isoformat(details.entered_at),
+                "bill_total_cents": details.bill_total_cents,
+                "has_image": details.has_image,
+                "show_bill_image_url": f"/api/receipts/{details.receipt_image_id}/image",
+                "participants": [
+                    {
+                        "participant_id": participant.participant_id,
+                        "participant_name": participant.participant_name,
+                        "participant_total_cents": participant.participant_total_cents,
+                        "lines": [
+                            {
+                                "receipt_item_id": line.receipt_item_id,
+                                "item_description": line.item_description,
+                                "amount_cents": line.amount_cents,
+                            }
+                            for line in participant.lines
+                        ],
+                    }
+                    for participant in details.participants
+                ],
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.get("/receipts/<receipt_image_id>/image")
+def get_receipt_image(receipt_image_id: str):
+    if not is_uuid(receipt_image_id):
+        return _json_error("Invalid receipt_image_id.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        image = repo.get_receipt_image(receipt_image_id=receipt_image_id)
+    except Exception:
+        return _json_error("Failed to fetch receipt image.", status=500, code="db_error")
+
+    if image is None:
+        return _json_error("Receipt image not found.", status=404, code="not_found")
+
+    if image.image_blob is not None:
+        mime_type = _guess_image_mimetype(image.image_blob, image.image_path)
+        return send_file(io.BytesIO(image.image_blob), mimetype=mime_type)
+
+    if image.image_path:
+        try:
+            mime_type = _guess_image_mimetype(b"", image.image_path)
+            return send_file(image.image_path, mimetype=mime_type)
+        except FileNotFoundError:
+            return _json_error("Receipt image file not found.", status=404, code="not_found")
+        except Exception:
+            return _json_error("Failed to read receipt image file.", status=500, code="file_error")
+
+    return _json_error("Receipt image not available.", status=404, code="not_found")
+
+
 @api_bp.get("/participants")
 def list_participants():
     repo = _repo()
@@ -156,12 +328,29 @@ def get_running_balances():
     try:
         participants = repo.list_running_balance_participants()
     except Exception:
-        return _json_error("Failed to fetch running balances.", status=500, code="db_error")
+        current_app.logger.exception("Failed to fetch running balance activity.")
+        return _json_error(
+            "Failed to fetch running balance activity.",
+            status=500,
+            code="db_error_running_balance_activity",
+        )
 
+    try:
+        folio_summaries = repo.list_participant_folios()
+    except Exception:
+        current_app.logger.exception("Failed to fetch running balance folio summaries.")
+        return _json_error(
+            "Failed to fetch running balance folio summaries.",
+            status=501,
+            code="db_error_running_balance_folio_summary",
+        )
+
+    summary_by_participant_id = {summary.participant_id: summary for summary in folio_summaries}
     response_participants = []
     for participant in participants:
         bills: Dict[str, dict] = {}
-        participant_total_cents = 0
+        active_cycle_charged_cents = 0
+        summary = summary_by_participant_id.get(participant.participant_id)
 
         for line in participant.lines:
             if line.receipt_id not in bills:
@@ -180,18 +369,131 @@ def get_running_balances():
                 }
             )
             bills[line.receipt_id]["bill_total_cents"] += line.contribution_cents
-            participant_total_cents += line.contribution_cents
+            active_cycle_charged_cents += line.contribution_cents
+
+        participant_net_balance_cents = summary.net_balance_cents if summary else active_cycle_charged_cents
+        participant_status = (
+            summary.status
+            if summary
+            else ("owes_you" if participant_net_balance_cents > 0 else "you_owe_them" if participant_net_balance_cents < 0 else "settled")
+        )
 
         response_participants.append(
             {
                 "participant_id": participant.participant_id,
                 "participant_name": participant.participant_name,
-                "participant_total_cents": participant_total_cents,
+                "participant_total_cents": participant_net_balance_cents,
+                "total_charged_cents": summary.total_charged_cents if summary else active_cycle_charged_cents,
+                "total_settled_cents": summary.total_settled_cents if summary else 0,
+                "total_repaid_cents": summary.total_repaid_cents if summary else 0,
+                "net_balance_cents": participant_net_balance_cents,
+                "status": participant_status,
                 "bills": list(bills.values()),
+                "settlement_events": [
+                    {
+                        "event_id": event.event_id,
+                        "event_at": _isoformat(event.event_at),
+                        "amount_cents": event.amount_cents,
+                        "reference_details": event.reference_details,
+                    }
+                    for event in participant.settlement_events
+                ],
+                "repayment_events": [
+                    {
+                        "event_id": event.event_id,
+                        "event_at": _isoformat(event.event_at),
+                        "amount_cents": event.amount_cents,
+                        "reference_details": event.reference_details,
+                    }
+                    for event in participant.repayment_events
+                ],
             }
         )
 
     return jsonify({"participants": response_participants}), 200
+
+
+@api_bp.get("/participants/folios")
+def list_participant_folios():
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        summaries = repo.list_participant_folios()
+    except Exception:
+        return _json_error("Failed to fetch participant folios.", status=500, code="db_error")
+
+    return jsonify({"folios": [_folio_summary_payload(summary) for summary in summaries]}), 200
+
+
+@api_bp.get("/participants/<participant_id>/folio")
+def get_participant_folio(participant_id: str):
+    if not is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+
+    raw_max_events = request.args.get("max_events", "100")
+    try:
+        max_events = int(raw_max_events)
+    except ValueError:
+        return _json_error("'max_events' must be an integer.", status=400)
+
+    if max_events <= 0 or max_events > 500:
+        return _json_error("'max_events' must be between 1 and 500.", status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        folio = repo.get_participant_folio(participant_id=participant_id, max_events=max_events)
+    except RepositoryNotFoundError:
+        return _json_error("Participant not found.", status=404, code="not_found")
+    except Exception:
+        return _json_error("Failed to fetch participant folio.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                **_folio_summary_payload(folio.summary),
+                "charge_events": [_folio_event_payload(event) for event in folio.charge_events],
+                "settlement_events": [_folio_event_payload(event) for event in folio.settlement_events],
+                "repayment_events": [_folio_event_payload(event) for event in folio.repayment_events],
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.get("/participants/folios/reconciliation")
+def get_folio_reconciliation():
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        mismatches = repo.list_running_total_mismatches()
+    except Exception:
+        return _json_error("Failed to run folio reconciliation.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "mismatch_count": len(mismatches),
+                "mismatches": [
+                    {
+                        "participant_id": mismatch.participant_id,
+                        "display_name": mismatch.display_name,
+                        "cached_net_balance_cents": mismatch.cached_net_balance_cents,
+                        "computed_net_balance_cents": mismatch.computed_net_balance_cents,
+                        "delta_cents": mismatch.delta_cents,
+                    }
+                    for mismatch in mismatches
+                ],
+            }
+        ),
+        200,
+    )
 
 
 @api_bp.post("/participants")
@@ -250,6 +552,222 @@ def delete_participant(participant_id: str):
         return _json_error("Participant not found.", status=404, code="not_found")
 
     return jsonify({"deleted": True}), 200
+
+
+@api_bp.post("/participants/<participant_id>/settlements")
+def create_participant_settlement(participant_id: str):
+    if not is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return _json_error("Request body must be JSON.", status=400)
+
+    try:
+        amount_cents = parse_positive_cents(data.get("amount_cents"), field_name="amount_cents")
+        paid_at = parse_optional_iso_datetime(data.get("paid_at"), field_name="paid_at")
+        note = parse_optional_string(data.get("note"), field_name="note", max_len=500)
+        idempotency_key = parse_optional_string(
+            data.get("idempotency_key"),
+            field_name="idempotency_key",
+            max_len=255,
+        )
+        created_by = parse_optional_string(data.get("created_by"), field_name="created_by", max_len=255)
+    except ApiValidationError as exc:
+        return _json_error(str(exc), status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        result = repo.create_participant_settlement(
+            participant_id=participant_id,
+            amount_cents=amount_cents,
+            paid_at=paid_at,
+            note=note,
+            idempotency_key=idempotency_key,
+            created_by=created_by,
+        )
+    except RepositoryNotFoundError:
+        return _json_error("Participant not found.", status=404, code="not_found")
+    except RepositoryConflictError as exc:
+        return _json_error(str(exc), status=409, code="conflict")
+    except Exception:
+        return _json_error("Failed to create settlement.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "transaction_type": "settlement",
+                "settlement_id": result.settlement_id,
+                "previous_net_balance_cents": result.previous_net_balance_cents,
+                "payment_amount_cents": result.settlement_amount_cents,
+                "settlement_amount_cents": result.settlement_amount_cents,
+                "new_net_balance_cents": result.new_net_balance_cents,
+                "status": result.status,
+                "overpayment_cents": result.overpayment_cents,
+                "overpayment_happened": result.overpayment_cents > 0,
+                "idempotency_replayed": result.idempotency_replayed,
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.post("/participants/<participant_id>/repayments")
+def create_participant_repayment(participant_id: str):
+    if not is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return _json_error("Request body must be JSON.", status=400)
+
+    try:
+        amount_cents = parse_positive_cents(data.get("amount_cents"), field_name="amount_cents")
+        paid_at = parse_optional_iso_datetime(data.get("paid_at"), field_name="paid_at")
+        note = parse_optional_string(data.get("note"), field_name="note", max_len=500)
+        idempotency_key = parse_optional_string(
+            data.get("idempotency_key"),
+            field_name="idempotency_key",
+            max_len=255,
+        )
+        created_by = parse_optional_string(data.get("created_by"), field_name="created_by", max_len=255)
+    except ApiValidationError as exc:
+        return _json_error(str(exc), status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        result = repo.create_participant_repayment(
+            participant_id=participant_id,
+            amount_cents=amount_cents,
+            paid_at=paid_at,
+            note=note,
+            idempotency_key=idempotency_key,
+            created_by=created_by,
+        )
+    except RepositoryNotFoundError:
+        return _json_error("Participant not found.", status=404, code="not_found")
+    except RepositoryConflictError as exc:
+        return _json_error(str(exc), status=409, code="conflict")
+    except Exception:
+        return _json_error("Failed to create repayment.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "transaction_type": "repayment",
+                "repayment_id": result.repayment_id,
+                "previous_net_balance_cents": result.previous_net_balance_cents,
+                "repayment_amount_cents": result.repayment_amount_cents,
+                "new_net_balance_cents": result.new_net_balance_cents,
+                "status": result.status,
+                "overpayment_cents": result.overpayment_cents,
+                "idempotency_replayed": result.idempotency_replayed,
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.post("/participants/<participant_id>/settlements/<settlement_id>/reverse")
+def reverse_participant_settlement(participant_id: str, settlement_id: str):
+    if not is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+    if not is_uuid(settlement_id):
+        return _json_error("Invalid settlement_id.", status=400)
+
+    data = request.get_json(silent=True) or {}
+
+    try:
+        reversal_note = parse_optional_string(data.get("note"), field_name="note", max_len=500)
+        reversed_by = parse_optional_string(data.get("reversed_by"), field_name="reversed_by", max_len=255)
+    except ApiValidationError as exc:
+        return _json_error(str(exc), status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        result = repo.reverse_participant_settlement(
+            participant_id=participant_id,
+            settlement_id=settlement_id,
+            reversed_by=reversed_by,
+            reversal_note=reversal_note,
+        )
+    except RepositoryNotFoundError:
+        return _json_error("Settlement not found.", status=404, code="not_found")
+    except Exception:
+        return _json_error("Failed to reverse settlement.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "transaction_type": "settlement_reversal",
+                "settlement_id": result.settlement_id,
+                "previous_net_balance_cents": result.previous_net_balance_cents,
+                "reversed_settlement_amount_cents": result.reversed_settlement_amount_cents,
+                "new_net_balance_cents": result.new_net_balance_cents,
+                "status": result.status,
+                "overpayment_cents": result.overpayment_cents,
+                "reversal_applied": result.reversal_applied,
+            }
+        ),
+        200,
+    )
+
+
+@api_bp.post("/participants/<participant_id>/repayments/<repayment_id>/reverse")
+def reverse_participant_repayment(participant_id: str, repayment_id: str):
+    if not is_uuid(participant_id):
+        return _json_error("Invalid participant_id.", status=400)
+    if not is_uuid(repayment_id):
+        return _json_error("Invalid repayment_id.", status=400)
+
+    data = request.get_json(silent=True) or {}
+
+    try:
+        reversal_note = parse_optional_string(data.get("note"), field_name="note", max_len=500)
+        reversed_by = parse_optional_string(data.get("reversed_by"), field_name="reversed_by", max_len=255)
+    except ApiValidationError as exc:
+        return _json_error(str(exc), status=400)
+
+    repo = _repo()
+    if not repo.enabled:
+        return _json_error("DATABASE_URL is not configured.", status=503, code="db_unavailable")
+
+    try:
+        result = repo.reverse_participant_repayment(
+            participant_id=participant_id,
+            repayment_id=repayment_id,
+            reversed_by=reversed_by,
+            reversal_note=reversal_note,
+        )
+    except RepositoryNotFoundError:
+        return _json_error("Repayment not found.", status=404, code="not_found")
+    except Exception:
+        return _json_error("Failed to reverse repayment.", status=500, code="db_error")
+
+    return (
+        jsonify(
+            {
+                "transaction_type": "repayment_reversal",
+                "repayment_id": result.repayment_id,
+                "previous_net_balance_cents": result.previous_net_balance_cents,
+                "reversed_repayment_amount_cents": result.reversed_repayment_amount_cents,
+                "new_net_balance_cents": result.new_net_balance_cents,
+                "status": result.status,
+                "overpayment_cents": result.overpayment_cents,
+                "reversal_applied": result.reversal_applied,
+            }
+        ),
+        200,
+    )
 
 
 @api_bp.get("/participants/<participant_id>/ledger")

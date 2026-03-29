@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List
 from uuid import UUID
 
-from app.db.repository import ParsedItem
+from app.services.receipt_parser import ParsedItem
 
 
 class ApiValidationError(ValueError):
@@ -63,3 +64,38 @@ def parse_unique_participant_ids(raw_participants: object) -> List[str]:
         participant_ids.append(pid)
 
     return participant_ids
+
+
+def parse_positive_cents(raw_value: object, *, field_name: str = "amount_cents") -> int:
+    if not isinstance(raw_value, int) or raw_value <= 0:
+        raise ApiValidationError(f"'{field_name}' must be an integer > 0.")
+    return raw_value
+
+
+def parse_optional_iso_datetime(raw_value: object, *, field_name: str) -> datetime | None:
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        raise ApiValidationError(f"'{field_name}' must be an ISO-8601 datetime string when provided.")
+
+    normalized = raw_value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ApiValidationError(f"'{field_name}' must be a valid ISO-8601 datetime string.") from exc
+
+
+def parse_optional_string(raw_value: object, *, field_name: str, max_len: int | None = None) -> str | None:
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, str):
+        raise ApiValidationError(f"'{field_name}' must be a string when provided.")
+
+    value = raw_value.strip()
+    if not value:
+        return None
+
+    if max_len is not None and len(value) > max_len:
+        raise ApiValidationError(f"'{field_name}' must be <= {max_len} characters.")
+
+    return value

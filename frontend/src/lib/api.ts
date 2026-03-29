@@ -1,10 +1,17 @@
 import type {
   AssignmentsMap,
+  BillPreview,
+  BillSplitDetail,
+  BillPreviewsResponse,
   CalculateSplitResponse,
   CreateReceiptResponse,
+  FolioRepaymentResponse,
+  FolioSettlementResponse,
   Item,
   Participant,
+  ParticipantFolioSummary,
   ParticipantLedger,
+  ParticipantFoliosResponse,
   RunningBalancesResponse,
 } from "../types/split";
 import { requestJson } from "./http";
@@ -90,6 +97,57 @@ export async function createParticipant(args: { display_name: string; apiBase: s
   });
 }
 
+export async function listParticipantFolios(apiBase: string): Promise<ParticipantFolioSummary[]> {
+  const data = await requestJson<ParticipantFoliosResponse>(`${apiBase}/api/participants/folios`);
+  if (!Array.isArray(data.folios)) {
+    throw new Error("Unexpected response from /api/participants/folios.");
+  }
+  return data.folios;
+}
+
+export async function createParticipantSettlement(args: {
+  participantId: string;
+  amount_cents: number;
+  note?: string;
+  paid_at?: string;
+  idempotency_key?: string;
+  apiBase: string;
+}): Promise<FolioSettlementResponse> {
+  return requestJson<FolioSettlementResponse>(`${args.apiBase}/api/participants/${args.participantId}/settlements`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      amount_cents: args.amount_cents,
+      note: args.note,
+      paid_at: args.paid_at,
+      idempotency_key: args.idempotency_key,
+    }),
+  });
+}
+
+export async function createParticipantRepayment(args: {
+  participantId: string;
+  amount_cents: number;
+  note?: string;
+  paid_at?: string;
+  idempotency_key?: string;
+  apiBase: string;
+}): Promise<FolioRepaymentResponse> {
+  return requestJson<FolioRepaymentResponse>(`${args.apiBase}/api/participants/${args.participantId}/repayments`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      amount_cents: args.amount_cents,
+      note: args.note,
+      paid_at: args.paid_at,
+      idempotency_key: args.idempotency_key,
+    }),
+  });
+}
 
 export async function getRunningBalances(apiBase: string): Promise<RunningBalancesResponse> {
   const data = await requestJson<RunningBalancesResponse>(`${apiBase}/api/running-balances`);
@@ -111,6 +169,29 @@ export async function getParticipantLedger(args: {
 
   if (!Array.isArray(data.bills) || typeof data.computed_total_cents !== "number") {
     throw new Error("Unexpected response from /api/participants/{participant_id}/ledger.");
+  }
+
+  return data;
+}
+
+export async function listBillPreviews(apiBase: string): Promise<BillPreview[]> {
+  const data = await requestJson<BillPreviewsResponse>(`${apiBase}/api/bills`);
+  if (!Array.isArray(data.bills)) {
+    throw new Error("Unexpected response from /api/bills.");
+  }
+  return data.bills;
+}
+
+export async function getBillSplitDetail(args: {
+  receiptImageId: string;
+  apiBase: string;
+}): Promise<BillSplitDetail> {
+  const data = await requestJson<BillSplitDetail>(
+    `${args.apiBase}/api/bills/${args.receiptImageId}/details`
+  );
+
+  if (!Array.isArray(data.participants) || typeof data.bill_total_cents !== "number") {
+    throw new Error("Unexpected response from /api/bills/{receipt_image_id}/details.");
   }
 
   return data;
